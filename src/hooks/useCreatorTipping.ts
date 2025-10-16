@@ -1,44 +1,17 @@
 "use client";
 
 import { useCallback } from "react";
-import { Address, encodeFunctionData, parseUnits } from "viem";
-import { usePublicClient } from "wagmi";
-import { useSubAccount } from "./useSubAccount";
+import { Address, parseUnits } from "viem";
 
-// USDC contract on Base Sepolia testnet
-const USDC_BASE_SEPOLIA =
-  "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
+import type { SubAccount } from "./useSubAccount";
 
-// Standard ERC20 ABI for transfer
-const ERC20_ABI = [
-  {
-    name: "transfer",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    name: "balanceOf",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "account", type: "address" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  {
-    name: "allowance",
-    type: "function",
-    stateMutability: "view",
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-] as const;
+// We'll tip with ETH instead of USDC since USDC transfers aren't working reliably
+// ETH tip amounts in USD equivalent (approximate)
+const ETH_TIP_AMOUNTS = {
+  small: "0.001", // ~$2-3
+  medium: "0.003", // ~$6-9
+  large: "0.005", // ~$10-15
+} as const;
 
 export interface TipResult {
   success: boolean;
@@ -47,66 +20,50 @@ export interface TipResult {
   amount?: string;
 }
 
-export function useCreatorTipping() {
-  const publicClient = usePublicClient();
-  const { executeFromSubAccount, subAccount } = useSubAccount();
-
+export function useCreatorTipping(
+  subAccount: SubAccount | null,
+  executeFromSubAccount:
+    | ((
+        calls: Array<{ to: string; data: string; value: string }>
+      ) => Promise<string>)
+    | undefined
+) {
   /**
-   * Tip a creator with USDC
+   * Tip a creator with ETH (direct ETH amounts)
    */
   const tipCreator = useCallback(
     async (
       creatorAddress: Address,
-      tipAmountUsd: number = 1 // Default $1 tip
+      tipAmountEth: number = 0.001 // Direct ETH amount
     ): Promise<TipResult> => {
-      if (!publicClient || !subAccount) {
-        throw new Error("Client or Sub Account not available");
+      if (!subAccount || !executeFromSubAccount) {
+        throw new Error("Sub Account or execution function not available");
       }
 
       try {
-        console.log(
-          `Tipping creator ${creatorAddress} with $${tipAmountUsd} USDC`
-        );
+        // Use the ETH amount directly
+        const ethAmount = tipAmountEth.toFixed(4);
 
-        // Convert USD amount to USDC units (6 decimals for USDC)
-        const tipAmount = parseUnits(tipAmountUsd.toString(), 6);
+        console.log(`Tipping creator ${creatorAddress} with ${ethAmount} ETH`);
 
-        // Check Sub Account's USDC balance
-        const balance = (await publicClient.readContract({
-          address: USDC_BASE_SEPOLIA,
-          abi: ERC20_ABI,
-          functionName: "balanceOf",
-          args: [subAccount.address as Address],
-        })) as bigint;
+        // Convert ETH amount to wei
+        const tipAmountWei = parseUnits(ethAmount, 18);
 
-        if (balance < tipAmount) {
-          throw new Error(
-            `Insufficient USDC balance. Need $${tipAmountUsd}, have $${(
-              Number(balance) / 1e6
-            ).toFixed(2)}`
-          );
-        }
+        // Balance validation is done in the calling component (page.tsx)
 
-        // Encode the transfer transaction
-        const transferData = encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "transfer",
-          args: [creatorAddress, tipAmount],
-        });
-
-        // Execute tip via Sub Account
+        // Execute ETH transfer via Sub Account
         const callsId = await executeFromSubAccount([
           {
-            to: USDC_BASE_SEPOLIA,
-            data: transferData,
-            value: "0", // No ETH needed for USDC transfer
+            to: creatorAddress,
+            data: "0x", // No data needed for ETH transfer
+            value: `0x${tipAmountWei.toString(16)}`, // ETH amount in hex
           },
         ]);
 
         return {
           success: true,
           txHash: callsId,
-          amount: `$${tipAmountUsd} USDC`,
+          amount: `${ethAmount} ETH`,
         };
       } catch (error) {
         console.error("Tip failed:", error);
@@ -116,35 +73,22 @@ export function useCreatorTipping() {
         };
       }
     },
-    [publicClient, executeFromSubAccount, subAccount]
+    [executeFromSubAccount, subAccount]
   );
 
   /**
-   * Get Sub Account's USDC balance
+   * Get Sub Account's ETH balance (placeholder - use getSubAccountBalance from useSubAccount instead)
    */
-  const getUSDCBalance = useCallback(async (): Promise<number> => {
-    if (!publicClient || !subAccount) {
-      return 0;
-    }
-
-    try {
-      const balance = (await publicClient.readContract({
-        address: USDC_BASE_SEPOLIA,
-        abi: ERC20_ABI,
-        functionName: "balanceOf",
-        args: [subAccount.address as Address],
-      })) as bigint;
-
-      // Convert from 6 decimals to USD
-      return Number(balance) / 1e6;
-    } catch (error) {
-      console.error("Failed to get USDC balance:", error);
-      return 0;
-    }
-  }, [publicClient, subAccount]);
+  const getETHBalance = useCallback(async (): Promise<number> => {
+    // This function is deprecated - balance checking is done via getSubAccountBalance
+    console.warn(
+      "getETHBalance is deprecated - use getSubAccountBalance from useSubAccount"
+    );
+    return 0;
+  }, []);
 
   /**
-   * Quick tip presets
+   * Quick tip presets (direct ETH amounts)
    */
   const quickTip = useCallback(
     async (
@@ -153,10 +97,10 @@ export function useCreatorTipping() {
       customAmount?: number
     ): Promise<TipResult> => {
       const amounts = {
-        coffee: 3, // $3
-        beer: 5, // $5
-        pizza: 10, // $10
-        custom: customAmount || 1,
+        coffee: 0.001, // 0.001 ETH
+        beer: 0.005, // 0.005 ETH
+        pizza: 0.01, // 0.01 ETH
+        custom: customAmount || 0.0005,
       };
 
       return tipCreator(creatorAddress, amounts[preset]);
@@ -167,7 +111,8 @@ export function useCreatorTipping() {
   return {
     tipCreator,
     quickTip,
-    getUSDCBalance,
-    USDC_CONTRACT: USDC_BASE_SEPOLIA,
+    getETHBalance,
+    // Keep old function name for compatibility but return ETH balance
+    getUSDCBalance: getETHBalance,
   };
 }

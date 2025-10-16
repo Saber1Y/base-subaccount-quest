@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { createBaseAccountSDK } from "@base-org/account";
-import { baseAccountSDKConfig } from "@/lib/config";
+import { baseAccountSDKConfig, BASE_SEPOLIA_CHAIN_ID } from "@/lib/config";
 import type { Address } from "viem";
 
 export interface SubAccount {
@@ -331,6 +331,7 @@ export function useSubAccount() {
           params: [
             {
               version: "2.0",
+              chainId: `0x${BASE_SEPOLIA_CHAIN_ID.toString(16)}`, // Base Sepolia chain ID in hex
               atomicRequired: true,
               from: subAccount.address,
               calls,

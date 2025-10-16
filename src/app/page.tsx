@@ -5,9 +5,11 @@ import { SignInWithBaseButton } from "@base-org/account-ui/react";
 
 import { useSubAccount } from "@/hooks/useSubAccount";
 import { useCreatorTipping } from "@/hooks/useCreatorTipping";
+import { useSpendPermissions } from "@/hooks/useSpendPermissions";
 import { SubAccountSetup } from "@/components/SubAccountSetup";
 import { CreatorCoinsFeed } from "@/components/CreatorCoinsFeed";
 import { DebugPanel } from "@/components/DebugPanel";
+import { SpendPermissionSetup } from "@/components/SpendPermissionSetup";
 import type { CreatorCoin } from "@/hooks/useCreatorCoins";
 
 export default function Home() {
@@ -23,11 +25,20 @@ export default function Home() {
     isConnected,
     fundSubAccount,
     getSubAccountBalance,
+    executeFromSubAccount,
   } = useSubAccount();
 
-  const { tipCreator, getUSDCBalance } = useCreatorTipping();
+  const { tipCreator } = useCreatorTipping(subAccount, executeFromSubAccount);
+
+  // Initialize spend permissions hook with Sub Account as spender
+  const spendPermissions = useSpendPermissions(
+    provider,
+    universalAddress as `0x${string}` | null,
+    subAccount?.address as `0x${string}` || universalAddress as `0x${string}` // Use Sub Account as spender
+  );
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
+  const [showSpendPermissionSetup, setShowSpendPermissionSetup] = useState(false);
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
   const [notifications, setNotifications] = useState<
@@ -38,24 +49,30 @@ export default function Home() {
     }>
   >([]);
 
-  // Fetch USDC balance when sub account is available
+  // Fetch ETH balance when sub account is available
   useEffect(() => {
     const fetchBalance = async () => {
       if (!subAccount) return;
 
       try {
-        const balance = await getUSDCBalance();
-        setUsdcBalance(balance);
+        // Use the working balance source (getSubAccountBalance) instead of getUSDCBalance
+        const balanceHex = await getSubAccountBalance();
+        if (balanceHex && typeof balanceHex === "string") {
+          const balance = Number(BigInt(balanceHex)) / 1e18;
+          setUsdcBalance(balance);
 
-        // Show helpful notification if balance is low
-        if (balance === 0) {
-          showNotification(
-            "info",
-            "💡 Fund your Sub Account with USDC to start tipping creators! Check the debug panel for instructions."
-          );
+          // Show helpful notification if balance is low
+          if (balance === 0) {
+            showNotification(
+              "info",
+              "💡 Fund your Sub Account with ETH to start tipping creators! Check the debug panel for instructions."
+            );
+          }
+        } else {
+          setUsdcBalance(0);
         }
       } catch (error) {
-        console.error("Failed to fetch USDC balance:", error);
+        console.error("Failed to fetch ETH balance:", error);
         setUsdcBalance(0);
       }
     };
@@ -65,7 +82,7 @@ export default function Home() {
     // Refresh balance every 30 seconds
     const interval = setInterval(fetchBalance, 30000);
     return () => clearInterval(interval);
-  }, [subAccount, getUSDCBalance]);
+  }, [subAccount, getSubAccountBalance]);
 
   const showNotification = (
     type: "success" | "error" | "info",
@@ -96,25 +113,95 @@ export default function Home() {
 
     setTradingCoin(coin.id);
     try {
-      console.log(`Tipping creator ${coin.name} with $${tipAmount} USDC`);
+      console.log(`Tipping creator ${coin.name} with ${tipAmount} ETH`);
+      
+      // Convert tip amount to wei for spend permission checks
+      const tipAmountWei = BigInt(Math.floor(tipAmount * 1e18));
+
+      // First, try to find a suitable spend permission
+      const permission = await spendPermissions.findSuitablePermission(tipAmountWei);
+
+      if (permission) {
+        // Use zero-popup spend permission
+        showNotification(
+          "info",
+          `💫 Using spend permission - tipping ${coin.name} with no wallet pop-ups!`
+        );
+
+        try {
+          // Execute spend permission to transfer ETH directly from Base Account to creator
+          const txHash = await spendPermissions.executeTipWithPermission(
+            permission,
+            tipAmountWei,
+            coin.creatorAddress as `0x${string}`
+          );
+
+          showNotification(
+            "success",
+            `🎉 Successfully tipped ${tipAmount} ETH to ${coin.name} creator using spend permission! Zero pop-ups!`
+          );
+          console.log("Spend permission tip transaction hash:", txHash);
+
+          // Refresh balance after successful tip
+          setTimeout(async () => {
+            try {
+              const balanceHex = await getSubAccountBalance();
+              if (balanceHex && typeof balanceHex === "string") {
+                const newBalance = Number(BigInt(balanceHex)) / 1e18;
+                setUsdcBalance(newBalance);
+              }
+            } catch (error) {
+              console.error("Failed to refresh balance:", error);
+            }
+          }, 2000); // Wait a bit for blockchain confirmation
+
+          return;
+        } catch (spendError) {
+          console.error("Spend permission failed, falling back to regular tip:", spendError);
+          showNotification(
+            "info",
+            "Spend permission failed, trying regular tip..."
+          );
+          // Fall through to regular tipping logic
+        }
+      } else {
+        // No suitable permission found - check if we should show permission setup
+        if (spendPermissions.permissions.length === 0) {
+          showNotification(
+            "info",
+            "💡 Set up spend permissions for zero-popup tipping!"
+          );
+          setShowSpendPermissionSetup(true);
+          setTradingCoin(null);
+          return;
+        }
+      }
+
+      // Fallback to regular Sub Account tipping
       showNotification(
         "info",
-        `Tipping ${coin.name} creator $${tipAmount} USDC...`
+        `Tipping ${coin.name} creator ${tipAmount} ETH via Sub Account...`
       );
 
-      // Check balance first
-      const balance = await getUSDCBalance();
+      // Check balance first using the working balance source
+      const balanceHex = await getSubAccountBalance();
+      const balance =
+        balanceHex && typeof balanceHex === "string"
+          ? Number(BigInt(balanceHex)) / 1e18
+          : 0;
+
+      // tipAmount is now direct ETH amount
       if (balance < tipAmount) {
         showNotification(
           "error",
-          `Insufficient USDC balance. You have $${balance.toFixed(
-            2
-          )}, need $${tipAmount}`
+          `Insufficient ETH balance. You have ${balance.toFixed(
+            4
+          )} ETH, need ${tipAmount.toFixed(4)} ETH`
         );
         return;
       }
 
-      // Execute the tip
+      // Execute the tip via Sub Account
       const result = await tipCreator(
         coin.creatorAddress as `0x${string}`,
         tipAmount
@@ -123,14 +210,17 @@ export default function Home() {
       if (result.success) {
         showNotification(
           "success",
-          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator! No wallet pop-ups!`
+          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator via Sub Account!`
         );
-        console.log("Tip transaction hash:", result.txHash);
+        console.log("Sub Account tip transaction hash:", result.txHash);
 
         // Refresh balance after successful tip
         try {
-          const newBalance = await getUSDCBalance();
-          setUsdcBalance(newBalance);
+          const balanceHex = await getSubAccountBalance();
+          if (balanceHex && typeof balanceHex === "string") {
+            const newBalance = Number(BigInt(balanceHex)) / 1e18;
+            setUsdcBalance(newBalance);
+          }
         } catch (error) {
           console.error("Failed to refresh balance:", error);
         }
@@ -182,7 +272,7 @@ export default function Home() {
               <span className="text-purple-600">CreatorCoins</span>
             </h1>
             <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
-              Tip creators instantly with USDC using{" "}
+              Tip creators instantly with ETH using{" "}
               <strong>zero wallet pop-ups</strong> via Base Sub Accounts
             </p>
 
@@ -206,7 +296,7 @@ export default function Home() {
                 </h3>
                 <ul className="text-green-800 text-sm space-y-2">
                   <li>• Zero wallet pop-ups</li>
-                  <li>• Instant USDC transfers</li>
+                  <li>• Instant ETH transfers</li>
                   <li>• Simple one-click tipping</li>
                   <li>• Web2-like experience</li>
                 </ul>
@@ -271,7 +361,7 @@ export default function Home() {
               Ready to start tipping creators? 🚀
             </h2>
             <p className="text-gray-600 mb-8">
-              Set up your Sub Account to enable instant, pop-up-free USDC
+              Set up your Sub Account to enable instant, pop-up-free ETH
               tipping. This one-time setup takes less than 2 minutes.
             </p>
             <button
@@ -321,11 +411,11 @@ export default function Home() {
             <div className="flex items-center gap-4">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                 <div className="text-xs text-green-600 font-medium">
-                  💳 USDC Balance (Testnet)
+                  ⚡ Sub Account ETH (Testnet)
                 </div>
                 <div className="text-sm font-bold text-green-900">
                   {usdcBalance !== null ? (
-                    `$${usdcBalance.toFixed(2)}`
+                    `${usdcBalance.toFixed(4)} ETH`
                   ) : (
                     <div className="h-4 w-16 bg-green-200 rounded animate-pulse" />
                   )}
@@ -399,7 +489,7 @@ export default function Home() {
           </div>
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             <div className="text-2xl font-bold text-green-600">Instant</div>
-            <div className="text-sm text-gray-600">USDC Tips</div>
+            <div className="text-sm text-gray-600">ETH Tips</div>
           </div>
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             <div className="text-2xl font-bold text-purple-600">Support</div>
@@ -414,7 +504,7 @@ export default function Home() {
               Creator Coins on Base
             </h2>
             <div className="text-sm text-gray-600">
-              Tip creators with testnet USDC instantly - no wallet pop-ups! 💸
+              Tip creators with testnet ETH instantly - no wallet pop-ups! ⚡
             </div>
           </div>
 
@@ -426,7 +516,7 @@ export default function Home() {
 
         {/* Footer */}
         <div className="text-center py-8 text-gray-500 text-sm">
-          <p>Powered by Base Sub Accounts + USDC</p>
+          <p>Powered by Base Sub Accounts + ETH</p>
           <p className="mt-2">
             Support creators instantly with zero friction 💜
           </p>
@@ -445,6 +535,20 @@ export default function Home() {
         fundSubAccount={fundSubAccount}
         getSubAccountBalance={getSubAccountBalance}
       />
+
+      {/* Spend Permission Setup Modal */}
+      {showSpendPermissionSetup && (
+        <SpendPermissionSetup
+          provider={provider}
+          userBaseAccount={universalAddress as `0x${string}`}
+          appSpenderAddress={subAccount?.address as `0x${string}` || universalAddress as `0x${string}`} // Use Sub Account as spender
+          onPermissionGranted={() => {
+            setShowSpendPermissionSetup(false);
+            showNotification("success", "🎉 Spend permissions set up! You can now tip with zero pop-ups!");
+          }}
+          onCancel={() => setShowSpendPermissionSetup(false)}
+        />
+      )}
     </div>
   );
 }

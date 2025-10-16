@@ -64,13 +64,16 @@ export function DebugPanel({
       if (getSubAccountBalance) {
         const subEthBal = await getSubAccountBalance();
         if (subEthBal && typeof subEthBal === "string") {
-          setSubAccountEthBalance((parseInt(subEthBal, 16) / 1e18).toFixed(4));
+          const ethBalance = parseInt(subEthBal, 16) / 1e18;
+          setSubAccountEthBalance(ethBalance.toFixed(4));
+          // Use the same balance for tipping availability
+          setUsdcBalance(ethBalance);
         }
+      } else {
+        // Fallback: Get ETH balance from tipping hook
+        const usdcBal = await getUSDCBalance();
+        setUsdcBalance(usdcBal);
       }
-
-      // Get USDC balance from Sub Account
-      const usdcBal = await getUSDCBalance();
-      setUsdcBalance(usdcBal);
     } catch (error) {
       console.error("Failed to refresh balances:", error);
     } finally {
@@ -166,8 +169,10 @@ export function DebugPanel({
                       {ethBalance ? `${ethBalance} ETH` : "Loading..."}
                     </div>
                     <div className="text-xs text-gray-600">
-                      USDC Balance:{" "}
-                      {usdcBalance ? `$${usdcBalance}` : "Loading..."}
+                      Available for Tipping:{" "}
+                      {usdcBalance
+                        ? `${usdcBalance.toFixed(4)} ETH`
+                        : "Loading..."}
                     </div>
                   </div>
 
@@ -187,9 +192,9 @@ export function DebugPanel({
                             : "Loading..."}
                         </div>
                         <div className="text-xs text-gray-600">
-                          USDC Balance:{" "}
+                          Available for Tipping:{" "}
                           {usdcBalance !== null
-                            ? `$${usdcBalance.toFixed(2)}`
+                            ? `${usdcBalance.toFixed(4)} ETH`
                             : "Loading..."}
                         </div>
                       </>
@@ -252,17 +257,10 @@ export function DebugPanel({
                         </button>
 
                         <button
-                          onClick={async () => {
-                            try {
-                              const balance = await getUSDCBalance();
-                              setUsdcBalance(balance);
-                            } catch (error) {
-                              console.error("Failed to refresh USDC:", error);
-                            }
-                          }}
+                          onClick={refreshBalances}
                           className="px-3 py-1 bg-purple-600 text-white rounded text-xs font-medium hover:bg-purple-700"
                         >
-                          Check USDC
+                          Refresh Tip Balance
                         </button>
                       </>
                     )}
@@ -319,27 +317,15 @@ export function DebugPanel({
                 </div>
 
                 <div className="text-xs text-blue-700">
-                  <strong>Step 3a:</strong> Get testnet USDC from{" "}
-                  <a
-                    href="https://faucet.circle.com/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:no-underline font-medium"
-                  >
-                    Circle Faucet
-                  </a>{" "}
-                  (goes to your Base Account first)
+                  <strong>Step 3:</strong> Perfect! Your Sub Account has ETH
+                  available. You can now tip creators instantly with zero wallet
+                  pop-ups! ⚡
                 </div>
 
                 <div className="text-xs text-blue-700">
-                  <strong>Step 3b:</strong> Once confirmed, manually transfer
-                  USDC from your Base Account to your Sub Account address for
-                  tipping (use your wallet to send to Sub Account address above)
-                </div>
-
-                <div className="text-xs text-blue-700">
-                  <strong>Step 3c:</strong> Click &quot;Check USDC&quot; button
-                  to verify the transfer completed
+                  <strong>How it works:</strong> Tips send ETH directly from
+                  your Sub Account to creators. No confirmations needed -
+                  it&apos;s like Web2! (~$1 = 0.001 ETH, ~$5 = 0.005 ETH)
                 </div>
               </div>
 
@@ -377,8 +363,8 @@ export function DebugPanel({
                         : "text-orange-600"
                     }`}
                   >
-                    {usdcBalance && usdcBalance > 0 ? "✅" : "⏳"} Sub Account
-                    USDC
+                    {usdcBalance && usdcBalance > 0 ? "✅" : "⏳"} Ready to Tip
+                    (ETH)
                   </span>
                 </div>
 

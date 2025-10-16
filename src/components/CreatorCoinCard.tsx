@@ -161,7 +161,7 @@ export function CreatorCoinCard({
         {/* Quick tip buttons */}
         <div className="grid grid-cols-3 gap-2 mb-3">
           <button
-            onClick={() => onTip?.(coin, 3)}
+            onClick={() => onTip?.(coin, 0.001)}
             disabled={disabled || isLoading}
             className={`
               py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
@@ -172,11 +172,11 @@ export function CreatorCoinCard({
               }
             `}
           >
-            ☕ $3
+            ☕ 0.001 ETH
           </button>
 
           <button
-            onClick={() => onTip?.(coin, 5)}
+            onClick={() => onTip?.(coin, 0.005)}
             disabled={disabled || isLoading}
             className={`
               py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
@@ -187,11 +187,11 @@ export function CreatorCoinCard({
               }
             `}
           >
-            🍺 $5
+            🍺 0.005 ETH
           </button>
 
           <button
-            onClick={() => onTip?.(coin, 10)}
+            onClick={() => onTip?.(coin, 0.01)}
             disabled={disabled || isLoading}
             className={`
               py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
@@ -202,13 +202,13 @@ export function CreatorCoinCard({
               }
             `}
           >
-            🍕 $10
+            🍕 0.01 ETH
           </button>
         </div>
 
         {/* Custom tip button */}
         <button
-          onClick={() => onTip?.(coin, 1)}
+          onClick={() => onTip?.(coin, 0.0005)}
           disabled={disabled || isLoading}
           className={`
             w-full py-2 px-4 rounded-lg font-medium text-sm transition-all duration-200
@@ -225,7 +225,7 @@ export function CreatorCoinCard({
               Tipping...
             </div>
           ) : (
-            "💝 Tip $1 USDC"
+            "⚡ Tip 0.0005 ETH"
           )}
         </button>
 
