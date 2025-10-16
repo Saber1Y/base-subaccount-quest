@@ -2,41 +2,26 @@
 
 import { useState } from "react";
 import { useCreatorCoins, type CreatorCoin } from "@/hooks/useCreatorCoins";
-import { CreatorCoinCard } from "./CreatorCoinCard";
+import { CreatorCoinCard } from "@/components/CreatorCoinCard";
 
 type FeedType = "new" | "gainers" | "volume";
 
 interface CreatorCoinsFeedProps {
-  onBuyCoin?: (coin: CreatorCoin) => void;
-  onSellCoin?: (coin: CreatorCoin) => void;
+  onTip?: (coin: CreatorCoin, amount: number) => void;
+  loadingCoinId?: string | null;
 }
 
 export function CreatorCoinsFeed({
-  onBuyCoin,
-  onSellCoin,
+  onTip,
+  loadingCoinId,
 }: CreatorCoinsFeedProps) {
   const [feedType, setFeedType] = useState<FeedType>("new");
-  const [loadingCoin, setLoadingCoin] = useState<string | null>(null);
 
   const { coins, isLoading, error, hasMore, loadMore, refetch } =
     useCreatorCoins(feedType);
 
-  const handleBuyCoin = async (coin: CreatorCoin) => {
-    setLoadingCoin(coin.id);
-    try {
-      await onBuyCoin?.(coin);
-    } finally {
-      setLoadingCoin(null);
-    }
-  };
-
-  const handleSellCoin = async (coin: CreatorCoin) => {
-    setLoadingCoin(coin.id);
-    try {
-      await onSellCoin?.(coin);
-    } finally {
-      setLoadingCoin(null);
-    }
+  const handleTipCreator = async (coin: CreatorCoin, amount: number) => {
+    await onTip?.(coin, amount);
   };
 
   const feedTabs = [
@@ -155,10 +140,9 @@ export function CreatorCoinsFeed({
               <CreatorCoinCard
                 key={coin.id}
                 coin={coin}
-                onBuy={handleBuyCoin}
-                onSell={handleSellCoin}
-                isLoading={loadingCoin === coin.id}
-                disabled={loadingCoin !== null}
+                onTip={handleTipCreator}
+                isLoading={loadingCoinId === coin.id}
+                disabled={loadingCoinId !== null}
               />
             ))}
           </div>

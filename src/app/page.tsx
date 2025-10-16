@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { SignInWithBaseButton } from "@base-org/account-ui/react";
 
 import { useSubAccount } from "@/hooks/useSubAccount";
+import { useCreatorTipping } from "@/hooks/useCreatorTipping";
 // import { useZoraNFTs, type ZoraNFT } from "@/hooks/useZoraNFTs";
 // import { NFTCard } from "@/components/NFTCard";
 import { SubAccountSetup } from "@/components/SubAccountSetup";
@@ -18,8 +19,9 @@ export default function Home() {
     status,
     connectBaseAccount,
     createSubAccount,
-    // executeFromSubAccount, // Will be used for actual coin trading
   } = useSubAccount();
+
+  const { tipCreator, getUSDCBalance } = useCreatorTipping();
 
   // const {
   //   nfts,
@@ -29,7 +31,48 @@ export default function Home() {
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
-  console.log("Trading coin state:", tradingCoin); // Used to avoid lint error
+  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
+  const [notifications, setNotifications] = useState<
+    Array<{
+      id: string;
+      type: "success" | "error" | "info";
+      message: string;
+    }>
+  >([]);
+
+  // Fetch USDC balance when sub account is available
+  useEffect(() => {
+    const fetchBalance = async () => {
+      if (!subAccount) return;
+
+      try {
+        const balance = await getUSDCBalance();
+        setUsdcBalance(balance);
+      } catch (error) {
+        console.error("Failed to fetch USDC balance:", error);
+        setUsdcBalance(0);
+      }
+    };
+
+    fetchBalance();
+
+    // Refresh balance every 30 seconds
+    const interval = setInterval(fetchBalance, 30000);
+    return () => clearInterval(interval);
+  }, [subAccount, getUSDCBalance]);
+
+  const showNotification = (
+    type: "success" | "error" | "info",
+    message: string
+  ) => {
+    const id = Date.now().toString();
+    setNotifications((prev) => [...prev, { id, type, message }]);
+
+    // Auto-remove after 5 seconds
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    }, 5000);
+  };
 
   const handleSignInWithBase = async () => {
     try {
@@ -39,47 +82,63 @@ export default function Home() {
     }
   };
 
-  const handleBuyCoin = async (coin: CreatorCoin) => {
-    if (!subAccount || !universalAddress) return;
-
-    setTradingCoin(coin.id);
-    try {
-      // TODO: Implement actual coin buying logic with Zora Coins SDK
-      // For now, just show a placeholder
-      console.log("Buying coin:", coin.name);
-
-      // Simulate transaction
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // Show success
-      alert(
-        `Successfully bought ${coin.name} (${coin.symbol})! 🎉 No pop-ups!`
-      );
-    } catch (error) {
-      console.error("Coin purchase failed:", error);
-      alert("Coin purchase failed. Please try again.");
-    } finally {
-      setTradingCoin(null);
+  const handleTipCreator = async (coin: CreatorCoin, tipAmount: number) => {
+    if (!subAccount || !universalAddress) {
+      showNotification("error", "Please connect your Base Account first");
+      return;
     }
-  };
-
-  const handleSellCoin = async (coin: CreatorCoin) => {
-    if (!subAccount || !universalAddress) return;
 
     setTradingCoin(coin.id);
     try {
-      // TODO: Implement actual coin selling logic with Zora Coins SDK
-      // For now, just show a placeholder
-      console.log("Selling coin:", coin.name);
+      console.log(`Tipping creator ${coin.name} with $${tipAmount} USDC`);
+      showNotification(
+        "info",
+        `Tipping ${coin.name} creator $${tipAmount} USDC...`
+      );
 
-      // Simulate transaction
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Check balance first
+      const balance = await getUSDCBalance();
+      if (balance < tipAmount) {
+        showNotification(
+          "error",
+          `Insufficient USDC balance. You have $${balance.toFixed(
+            2
+          )}, need $${tipAmount}`
+        );
+        return;
+      }
 
-      // Show success
-      alert(`Successfully sold ${coin.name} (${coin.symbol})! 💰 No pop-ups!`);
+      // Execute the tip
+      const result = await tipCreator(
+        coin.creatorAddress as `0x${string}`,
+        tipAmount
+      );
+
+      if (result.success) {
+        showNotification(
+          "success",
+          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator! No wallet pop-ups!`
+        );
+        console.log("Tip transaction hash:", result.txHash);
+
+        // Refresh balance after successful tip
+        try {
+          const newBalance = await getUSDCBalance();
+          setUsdcBalance(newBalance);
+        } catch (error) {
+          console.error("Failed to refresh balance:", error);
+        }
+      } else {
+        throw new Error(result.error || "Tip failed");
+      }
     } catch (error) {
-      console.error("Coin sale failed:", error);
-      alert("Coin sale failed. Please try again.");
+      console.error("Tip failed:", error);
+      showNotification(
+        "error",
+        `Tip failed: ${
+          error instanceof Error ? error.message : "Please try again"
+        }`
+      );
     } finally {
       setTradingCoin(null);
     }
@@ -117,33 +176,33 @@ export default function Home() {
               <span className="text-purple-600">CreatorCoins</span>
             </h1>
             <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
-              Collect Zora NFTs instantly with{" "}
-              <strong>zero wallet pop-ups</strong> using Base Sub Accounts
+              Tip creators instantly with USDC using{" "}
+              <strong>zero wallet pop-ups</strong> via Base Sub Accounts
             </p>
 
             {/* Value Proposition */}
             <div className="grid md:grid-cols-2 gap-8 mb-12 max-w-4xl mx-auto">
               <div className="bg-red-50 border border-red-200 rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-red-900 mb-3">
-                  ❌ Traditional Flow
+                  ❌ Traditional Tipping
                 </h3>
                 <ul className="text-red-800 text-sm space-y-2">
-                  <li>• 3+ wallet pop-ups per mint</li>
-                  <li>• Slow confirmation times</li>
-                  <li>• Interrupted user experience</li>
-                  <li>• High friction checkout</li>
+                  <li>• Multiple wallet confirmations</li>
+                  <li>• High gas fees</li>
+                  <li>• Complicated UX flow</li>
+                  <li>• Long confirmation times</li>
                 </ul>
               </div>
 
               <div className="bg-green-50 border border-green-200 rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-green-900 mb-3">
-                  ✅ CreatorCoins Flow
+                  ✅ CreatorCoins Tipping
                 </h3>
                 <ul className="text-green-800 text-sm space-y-2">
-                  <li>• Zero pop-ups after setup</li>
-                  <li>• Instant NFT minting</li>
-                  <li>• Seamless web2-like UX</li>
-                  <li>• One-click collecting</li>
+                  <li>• Zero wallet pop-ups</li>
+                  <li>• Instant USDC transfers</li>
+                  <li>• Simple one-click tipping</li>
+                  <li>• Web2-like experience</li>
                 </ul>
               </div>
             </div>
@@ -203,11 +262,11 @@ export default function Home() {
               </svg>
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Ready to start collecting? 🚀
+              Ready to start tipping creators? �
             </h2>
             <p className="text-gray-600 mb-8">
-              Set up your Sub Account to enable instant, pop-up-free NFT
-              minting. This one-time setup takes less than 2 minutes.
+              Set up your Sub Account to enable instant, pop-up-free USDC
+              tipping. This one-time setup takes less than 2 minutes.
             </p>
             <button
               onClick={() => setShowSubAccountSetup(true)}
@@ -240,7 +299,20 @@ export default function Home() {
             <h1 className="text-2xl font-bold text-purple-600">CreatorCoins</h1>
 
             {/* Sub Account Info */}
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4">
+              <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
+                <div className="text-xs text-green-600 font-medium">
+                  💳 USDC Balance
+                </div>
+                <div className="text-sm font-bold text-green-900">
+                  {usdcBalance !== null ? (
+                    `$${usdcBalance.toFixed(2)}`
+                  ) : (
+                    <div className="h-4 w-16 bg-green-200 rounded animate-pulse" />
+                  )}
+                </div>
+              </div>
+
               <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
                 <div className="text-xs text-blue-600 font-medium">
                   Sub Account
@@ -268,6 +340,36 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Notifications */}
+      {notifications.length > 0 && (
+        <div className="fixed top-4 right-4 z-50 space-y-2">
+          {notifications.map((notification) => (
+            <div
+              key={notification.id}
+              className={`
+                px-4 py-3 rounded-lg shadow-lg max-w-sm animate-slide-in
+                ${
+                  notification.type === "success"
+                    ? "bg-green-600 text-white"
+                    : ""
+                }
+                ${notification.type === "error" ? "bg-red-600 text-white" : ""}
+                ${notification.type === "info" ? "bg-blue-600 text-white" : ""}
+              `}
+            >
+              <div className="flex items-start gap-2">
+                <span className="text-lg">
+                  {notification.type === "success" ? "✅" : ""}
+                  {notification.type === "error" ? "❌" : ""}
+                  {notification.type === "info" ? "ℹ️" : ""}
+                </span>
+                <p className="text-sm font-medium">{notification.message}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Stats */}
@@ -278,36 +380,36 @@ export default function Home() {
           </div>
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             <div className="text-2xl font-bold text-green-600">Instant</div>
-            <div className="text-sm text-gray-600">Trading Speed</div>
+            <div className="text-sm text-gray-600">USDC Tips</div>
           </div>
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
-            <div className="text-2xl font-bold text-purple-600">Live</div>
-            <div className="text-sm text-gray-600">Creator Coins</div>
+            <div className="text-2xl font-bold text-purple-600">Support</div>
+            <div className="text-sm text-gray-600">Creators</div>
           </div>
         </div>
 
-        {/* NFT Gallery */}
+        {/* Creator Tipping */}
         <div className="mb-8">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-gray-900">
-              Zora NFTs on Base
+              Creator Coins on Base
             </h2>
             <div className="text-sm text-gray-600">
-              Trade creator coins instantly without wallet pop-ups! ⚡
+              Tip creators with USDC instantly - no wallet pop-ups! 💸
             </div>
           </div>
 
           <CreatorCoinsFeed
-            onBuyCoin={handleBuyCoin}
-            onSellCoin={handleSellCoin}
+            onTip={handleTipCreator}
+            loadingCoinId={tradingCoin}
           />
         </div>
 
         {/* Footer */}
         <div className="text-center py-8 text-gray-500 text-sm">
-          <p>Powered by Base Sub Accounts + Zora Protocol</p>
+          <p>Powered by Base Sub Accounts + USDC</p>
           <p className="mt-2">
-            Experience the future of seamless NFT collecting 🚀
+            Support creators instantly with zero friction �
           </p>
         </div>
       </main>

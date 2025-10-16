@@ -1,20 +1,19 @@
 "use client";
 
+import Image from "next/image";
 import { formatUnits } from "viem";
 import type { CreatorCoin } from "@/hooks/useCreatorCoins";
 
 interface CreatorCoinCardProps {
   coin: CreatorCoin;
-  onBuy?: (coin: CreatorCoin) => void;
-  onSell?: (coin: CreatorCoin) => void;
+  onTip?: (coin: CreatorCoin, amount: number) => void;
   isLoading?: boolean;
   disabled?: boolean;
 }
 
 export function CreatorCoinCard({
   coin,
-  onBuy,
-  onSell,
+  onTip,
   isLoading = false,
   disabled = false,
 }: CreatorCoinCardProps) {
@@ -57,9 +56,28 @@ export function CreatorCoinCard({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-2">
-              {/* Coin Avatar/Icon */}
-              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
-                {coin.symbol.slice(0, 2).toUpperCase()}
+              {/* Creator Avatar */}
+              <div className="w-12 h-12 rounded-full overflow-hidden ring-2 ring-purple-200 flex-shrink-0">
+                <Image
+                  src={`https://api.dicebear.com/7.x/personas/svg?seed=${coin.creatorAddress}&backgroundColor=b6e3f4,c0aede,d1d4f9,ffd5dc,ffdfbf&radius=50`}
+                  alt={`${coin.name} creator avatar`}
+                  width={48}
+                  height={48}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                    const fallback = e.currentTarget
+                      .nextElementSibling as HTMLElement;
+                    if (fallback) fallback.style.display = "flex";
+                  }}
+                />
+
+                <div
+                  className="w-full h-full bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-lg"
+                  style={{ display: "none" }}
+                >
+                  {coin.symbol.slice(0, 2).toUpperCase()}
+                </div>
               </div>
               <div>
                 <h3 className="font-bold text-lg text-gray-900">{coin.name}</h3>
@@ -82,6 +100,16 @@ export function CreatorCoinCard({
             {coin.creatorAddress.slice(-4)}
           </span>
           <span>{formatDate(coin.createdAt)}</span>
+        </div>
+      </div>
+
+      {/* Tipping Information */}
+      <div className="px-4 py-3 bg-green-50 border-b border-green-100">
+        <div className="text-center">
+          <div className="text-xs text-green-600 font-medium">
+            ✨ Support Creator
+          </div>
+          <div className="font-bold text-green-900">No wallet pop-ups!</div>
         </div>
       </div>
 
@@ -128,36 +156,45 @@ export function CreatorCoinCard({
         </div>
       </div>
 
-      {/* Action buttons */}
+      {/* Tip Action buttons */}
       <div className="p-4">
-        <div className="flex gap-2">
+        {/* Quick tip buttons */}
+        <div className="grid grid-cols-3 gap-2 mb-3">
           <button
-            onClick={() => onBuy?.(coin)}
+            onClick={() => onTip?.(coin, 3)}
             disabled={disabled || isLoading}
             className={`
-              flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-all duration-200
+              py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
               ${
                 disabled || isLoading
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                  : "bg-green-600 text-white hover:bg-green-700 shadow-lg hover:shadow-xl"
+                  : "bg-blue-600 text-white hover:bg-blue-700 shadow-lg hover:shadow-xl"
               }
             `}
           >
-            {isLoading ? (
-              <div className="flex items-center justify-center gap-2">
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Buying...
-              </div>
-            ) : (
-              "🚀 Buy"
-            )}
+            ☕ $3
           </button>
 
           <button
-            onClick={() => onSell?.(coin)}
+            onClick={() => onTip?.(coin, 5)}
             disabled={disabled || isLoading}
             className={`
-              flex-1 py-2 px-4 rounded-lg font-medium text-sm transition-all duration-200
+              py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
+              ${
+                disabled || isLoading
+                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                  : "bg-orange-600 text-white hover:bg-orange-700 shadow-lg hover:shadow-xl"
+              }
+            `}
+          >
+            🍺 $5
+          </button>
+
+          <button
+            onClick={() => onTip?.(coin, 10)}
+            disabled={disabled || isLoading}
+            className={`
+              py-2 px-3 rounded-lg font-medium text-sm transition-all duration-200
               ${
                 disabled || isLoading
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
@@ -165,9 +202,32 @@ export function CreatorCoinCard({
               }
             `}
           >
-            📉 Sell
+            🍕 $10
           </button>
         </div>
+
+        {/* Custom tip button */}
+        <button
+          onClick={() => onTip?.(coin, 1)}
+          disabled={disabled || isLoading}
+          className={`
+            w-full py-2 px-4 rounded-lg font-medium text-sm transition-all duration-200
+            ${
+              disabled || isLoading
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-purple-600 text-white hover:bg-purple-700 shadow-lg hover:shadow-xl"
+            }
+          `}
+        >
+          {isLoading ? (
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              Tipping...
+            </div>
+          ) : (
+            "💝 Tip $1 USDC"
+          )}
+        </button>
 
         {/* View on Zora link */}
         <a
