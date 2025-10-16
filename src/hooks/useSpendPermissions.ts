@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import { Address, parseUnits } from "viem";
+import { requestSpendPermission } from "@base-org/account/spend-permission";
+import { baseAccountSDKConfig } from "@/lib/config";
 
 interface Provider {
   request: (args: { method: string; params: unknown[] }) => Promise<unknown>;
@@ -25,6 +27,16 @@ export interface SpendPermissionStatus {
   isLoading: boolean;
 }
 
+const permission = await requestSpendPermission({
+  account: "0x...",
+  spender: "0x...",
+  token: "0x...",
+  chainId: 8453, // or any other supported chain
+  allowance: 1_000_000n,
+  periodInDays: 30,
+  provider: baseAccountSDKConfig.getProvider(),
+});
+
 export function useSpendPermissions(
   provider: Provider | null,
   userAddress?: Address, // The user's main address
@@ -35,6 +47,8 @@ export function useSpendPermissions(
       hasPermission: false,
       isLoading: false,
     });
+
+  console.log("Spend Permission:", permission);
 
   // ETH token address (0x0 for native ETH)
   const ETH_TOKEN_ADDRESS =
