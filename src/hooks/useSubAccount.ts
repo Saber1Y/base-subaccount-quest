@@ -15,12 +15,6 @@ interface GetSubAccountsResponse {
   subAccounts: SubAccount[];
 }
 
-interface WalletAddSubAccountResponse {
-  address: Address;
-  factory?: Address;
-  factoryData?: `0x${string}`;
-}
-
 export function useSubAccount() {
   const [provider, setProvider] = useState<ReturnType<
     ReturnType<typeof createBaseAccountSDK>["getProvider"]
@@ -59,26 +53,65 @@ export function useSubAccount() {
   // Check if user already has a Sub Account for this app
   const checkForExistingSubAccount = useCallback(
     async (universalAddr: Address) => {
-      if (!provider) return;
+      if (!provider) return null;
 
       try {
         setStatus("Checking for existing Sub Account...");
 
-        const response = (await provider.request({
-          method: "wallet_getSubAccounts",
-          params: [
-            {
-              account: universalAddr,
-              domain: window.location.origin,
-            },
-          ],
-        })) as GetSubAccountsResponse;
+        // Try multiple methods to get sub accounts
+        let response: GetSubAccountsResponse | null = null;
 
-        const existingSubAccount = response.subAccounts[0];
-        if (existingSubAccount) {
-          setSubAccount(existingSubAccount);
-          setStatus("Existing Sub Account found");
-          return existingSubAccount;
+        try {
+          response = (await provider.request({
+            method: "wallet_getSubAccounts",
+            params: [
+              {
+                account: universalAddr,
+                domain: window.location.origin,
+              },
+            ],
+          })) as GetSubAccountsResponse;
+        } catch (getError) {
+          console.warn(
+            "wallet_getSubAccounts failed, trying alternative:",
+            getError
+          );
+
+          // Fallback method
+          try {
+            response = (await provider.request({
+              method: "wallet_listSubAccounts",
+              params: [universalAddr],
+            })) as GetSubAccountsResponse;
+          } catch (listError) {
+            console.warn("wallet_listSubAccounts also failed:", listError);
+            setStatus("No existing Sub Account found");
+            return null;
+          }
+        }
+
+        if (
+          response &&
+          response.subAccounts &&
+          response.subAccounts.length > 0
+        ) {
+          // Find the first valid sub account (different address from EOA)
+          const validSubAccount = response.subAccounts.find(
+            (subAcc) =>
+              subAcc.address &&
+              subAcc.address.toLowerCase() !== universalAddr.toLowerCase()
+          );
+
+          if (validSubAccount) {
+            console.log("Found existing valid Sub Account:", validSubAccount);
+            setSubAccount(validSubAccount);
+            setStatus("Existing Sub Account found");
+            return validSubAccount;
+          } else {
+            console.warn("Found sub accounts but all have same address as EOA");
+            setStatus("No valid Sub Account found");
+            return null;
+          }
         } else {
           setStatus("No existing Sub Account found");
           return null;
@@ -126,38 +159,161 @@ export function useSubAccount() {
     }
   }, [provider, checkForExistingSubAccount]);
 
-  // Create a new Sub Account
-  const createSubAccount = useCallback(async () => {
-    if (!provider || !universalAddress) {
-      throw new Error("Provider or universal address not available");
-    }
+  // Fund Sub Account from Base Account (must be defined before createSubAccount)
+  const fundSubAccount = useCallback(
+    async (amountEth: string = "0.01") => {
+      if (!provider || !subAccount || !universalAddress) {
+        throw new Error("Provider, Sub Account, or Base Account not available");
+      }
 
-    setIsCreating(true);
-    setStatus("Creating Sub Account...");
+      setIsLoading(true);
+      setStatus("Funding Sub Account...");
 
-    try {
-      const newSubAccount = (await provider.request({
-        method: "wallet_addSubAccount",
-        params: [
-          {
-            account: {
-              type: "create",
+      try {
+        // Send ETH from Base Account to Sub Account
+        const txHash = await provider.request({
+          method: "eth_sendTransaction",
+          params: [
+            {
+              from: universalAddress,
+              to: subAccount.address,
+              value: `0x${(parseFloat(amountEth) * 1e18).toString(16)}`, // Convert ETH to wei in hex
             },
-          },
-        ],
-      })) as WalletAddSubAccountResponse;
+          ],
+        });
 
-      setSubAccount(newSubAccount);
-      setStatus("Sub Account created successfully!");
-      return newSubAccount;
-    } catch (error) {
-      console.error("Failed to create sub account:", error);
-      setStatus("Failed to create Sub Account");
-      throw error;
-    } finally {
-      setIsCreating(false);
-    }
-  }, [provider, universalAddress]);
+        setStatus("Sub Account funded successfully!");
+        return txHash;
+      } catch (error) {
+        console.error("Failed to fund sub account:", error);
+        setStatus("Failed to fund Sub Account");
+        throw error;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [provider, subAccount, universalAddress]
+  );
+
+  // Create a new Sub Account - UPDATED VERSION
+  const createSubAccount = useCallback(
+    async (fundingAmount: string = "0.1") => {
+      if (!provider || !universalAddress) {
+        throw new Error("Provider or universal address not available");
+      }
+
+      setIsCreating(true);
+      setStatus("Creating Sub Account...");
+
+      try {
+        // Use wallet_grantPermissions to create a smart contract wallet with spending permissions
+        const permissionsResponse = (await provider.request({
+          method: "wallet_grantPermissions",
+          params: [
+            {
+              permissions: [
+                {
+                  type: "native-token-transfer",
+                  data: {
+                    ticker: "ETH",
+                  },
+                  policies: [
+                    {
+                      type: "spending-limits",
+                      data: {
+                        limits: [
+                          {
+                            limit: `0x${(
+                              parseFloat(fundingAmount) * 1e18
+                            ).toString(16)}`,
+                            period: 86400, // 24 hours in seconds
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              ],
+              expiry: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year from now
+              signer: {
+                type: "account",
+                data: {
+                  id: window.location.origin,
+                },
+              },
+            },
+          ],
+        })) as any;
+
+        console.log("Permissions granted:", permissionsResponse);
+
+        // Extract the Sub Account address from the response
+        let newSubAccount: SubAccount;
+
+        if (
+          permissionsResponse?.grantedPermissions?.[0]?.signer?.data?.address
+        ) {
+          newSubAccount = {
+            address: permissionsResponse.grantedPermissions[0].signer.data
+              .address as Address,
+            factory: permissionsResponse.factory as Address | undefined,
+            factoryData: permissionsResponse.factoryData as
+              | `0x${string}`
+              | undefined,
+          };
+        } else if (permissionsResponse?.address) {
+          newSubAccount = {
+            address: permissionsResponse.address as Address,
+            factory: permissionsResponse.factory as Address | undefined,
+            factoryData: permissionsResponse.factoryData as
+              | `0x${string}`
+              | undefined,
+          };
+        } else {
+          throw new Error("No Sub Account address in permissions response");
+        }
+
+        // Verify the sub account was created with a different address
+        if (
+          !newSubAccount.address ||
+          newSubAccount.address.toLowerCase() === universalAddress.toLowerCase()
+        ) {
+          throw new Error(
+            "Sub Account creation failed: addresses are identical or invalid. Try using the Coinbase Smart Wallet which has native Sub Account support."
+          );
+        }
+
+        console.log("Sub Account created successfully:", {
+          address: newSubAccount.address,
+          factory: newSubAccount.factory,
+          factoryData: newSubAccount.factoryData,
+          baseAccount: universalAddress,
+        });
+
+        // Set the sub account first so fundSubAccount can use it
+        setSubAccount(newSubAccount);
+
+        // Now fund the Sub Account from the Base Account
+        setStatus("Funding Sub Account...");
+        try {
+          await fundSubAccount(fundingAmount);
+          setStatus("Sub Account funded successfully!");
+        } catch (fundError) {
+          console.warn("Failed to auto-fund Sub Account:", fundError);
+          setStatus("Sub Account created (please fund manually)");
+        }
+
+        return newSubAccount;
+      } catch (error) {
+        console.error("Failed to create sub account:", error);
+        setStatus("Failed to create Sub Account");
+        throw error;
+      } finally {
+        setIsCreating(false);
+      }
+    },
+    [provider, universalAddress, fundSubAccount]
+  );
 
   // Execute a transaction from Sub Account (for NFT minting)
   const executeFromSubAccount = useCallback(
@@ -199,6 +355,24 @@ export function useSubAccount() {
     [provider, subAccount]
   );
 
+  // Get Sub Account ETH balance for debugging
+  const getSubAccountBalance = useCallback(async () => {
+    if (!provider || !subAccount) {
+      return null;
+    }
+
+    try {
+      const balance = await provider.request({
+        method: "eth_getBalance",
+        params: [subAccount.address, "latest"],
+      });
+      return balance;
+    } catch (error) {
+      console.error("Failed to get sub account balance:", error);
+      return null;
+    }
+  }, [provider, subAccount]);
+
   // Convenience method to get or create Sub Account
   const ensureSubAccount = useCallback(async () => {
     if (!isConnected) {
@@ -224,7 +398,6 @@ export function useSubAccount() {
   ]);
 
   return {
-    // State
     provider,
     sdk,
     subAccount,
@@ -233,12 +406,12 @@ export function useSubAccount() {
     isCreating,
     isLoading,
     status,
-
-    // Actions
     connectBaseAccount,
     createSubAccount,
     executeFromSubAccount,
     ensureSubAccount,
     checkForExistingSubAccount,
+    getSubAccountBalance,
+    fundSubAccount,
   };
 }

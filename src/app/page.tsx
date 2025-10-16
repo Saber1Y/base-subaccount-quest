@@ -5,10 +5,9 @@ import { SignInWithBaseButton } from "@base-org/account-ui/react";
 
 import { useSubAccount } from "@/hooks/useSubAccount";
 import { useCreatorTipping } from "@/hooks/useCreatorTipping";
-// import { useZoraNFTs, type ZoraNFT } from "@/hooks/useZoraNFTs";
-// import { NFTCard } from "@/components/NFTCard";
 import { SubAccountSetup } from "@/components/SubAccountSetup";
 import { CreatorCoinsFeed } from "@/components/CreatorCoinsFeed";
+import { DebugPanel } from "@/components/DebugPanel";
 import type { CreatorCoin } from "@/hooks/useCreatorCoins";
 
 export default function Home() {
@@ -16,18 +15,17 @@ export default function Home() {
     subAccount,
     universalAddress,
     isCreating,
+    isLoading,
     status,
     connectBaseAccount,
     createSubAccount,
+    provider,
+    isConnected,
+    fundSubAccount,
+    getSubAccountBalance,
   } = useSubAccount();
 
   const { tipCreator, getUSDCBalance } = useCreatorTipping();
-
-  // const {
-  //   nfts,
-  //   isLoading: nftsLoading,
-  //   prepareMintTransaction,
-  // } = useZoraNFTs();
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
@@ -48,6 +46,14 @@ export default function Home() {
       try {
         const balance = await getUSDCBalance();
         setUsdcBalance(balance);
+
+        // Show helpful notification if balance is low
+        if (balance === 0) {
+          showNotification(
+            "info",
+            "💡 Fund your Sub Account with USDC to start tipping creators! Check the debug panel for instructions."
+          );
+        }
       } catch (error) {
         console.error("Failed to fetch USDC balance:", error);
         setUsdcBalance(0);
@@ -223,7 +229,7 @@ export default function Home() {
   // Authenticated but no sub account - show setup
   if (!subAccount) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen flex flex-col">
         {/* Header */}
         <header className="bg-white shadow-sm border-b">
           <div className="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
@@ -244,7 +250,7 @@ export default function Home() {
         </header>
 
         {/* Setup Prompt */}
-        <div className="max-w-2xl mx-auto px-4 py-16 text-center">
+        <div className="flex-1 max-w-2xl mx-auto px-4 py-16 text-center">
           <div className="bg-white rounded-2xl shadow-lg p-8">
             <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
               <svg
@@ -262,7 +268,7 @@ export default function Home() {
               </svg>
             </div>
             <h2 className="text-2xl font-bold text-gray-900 mb-4">
-              Ready to start tipping creators? �
+              Ready to start tipping creators? 🚀
             </h2>
             <p className="text-gray-600 mb-8">
               Set up your Sub Account to enable instant, pop-up-free USDC
@@ -285,13 +291,26 @@ export default function Home() {
             onCreateSubAccount={createSubAccount}
           />
         )}
+
+        {/* Debug Panel - ALWAYS SHOW when connected */}
+        <DebugPanel
+          subAccount={subAccount}
+          universalAddress={universalAddress}
+          provider={provider}
+          status={status}
+          isConnected={isConnected}
+          isLoading={isLoading}
+          isCreating={isCreating}
+          fundSubAccount={fundSubAccount}
+          getSubAccountBalance={getSubAccountBalance}
+        />
       </div>
     );
   }
 
-  // Authenticated with sub account - show NFT gallery
+  // Authenticated with sub account - show main app
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen flex flex-col bg-gray-50">
       {/* Header */}
       <header className="bg-white shadow-sm border-b sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-4">
@@ -302,7 +321,7 @@ export default function Home() {
             <div className="flex items-center gap-4">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                 <div className="text-xs text-green-600 font-medium">
-                  💳 USDC Balance
+                  💳 USDC Balance (Testnet)
                 </div>
                 <div className="text-sm font-bold text-green-900">
                   {usdcBalance !== null ? (
@@ -371,7 +390,7 @@ export default function Home() {
       )}
 
       {/* Main Content */}
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="flex-1 max-w-6xl mx-auto px-4 py-8 w-full">
         {/* Stats */}
         <div className="grid md:grid-cols-3 gap-4 mb-8">
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
@@ -395,7 +414,7 @@ export default function Home() {
               Creator Coins on Base
             </h2>
             <div className="text-sm text-gray-600">
-              Tip creators with USDC instantly - no wallet pop-ups! 💸
+              Tip creators with testnet USDC instantly - no wallet pop-ups! 💸
             </div>
           </div>
 
@@ -409,10 +428,23 @@ export default function Home() {
         <div className="text-center py-8 text-gray-500 text-sm">
           <p>Powered by Base Sub Accounts + USDC</p>
           <p className="mt-2">
-            Support creators instantly with zero friction �
+            Support creators instantly with zero friction 💜
           </p>
         </div>
       </main>
+
+      {/* Debug Panel - ALWAYS at bottom */}
+      <DebugPanel
+        subAccount={subAccount}
+        universalAddress={universalAddress}
+        provider={provider}
+        status={status}
+        isConnected={isConnected}
+        isLoading={isLoading}
+        isCreating={isCreating}
+        fundSubAccount={fundSubAccount}
+        getSubAccountBalance={getSubAccountBalance}
+      />
     </div>
   );
 }

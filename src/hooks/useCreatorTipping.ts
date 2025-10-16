@@ -5,8 +5,9 @@ import { Address, encodeFunctionData, parseUnits } from "viem";
 import { usePublicClient } from "wagmi";
 import { useSubAccount } from "./useSubAccount";
 
-// USDC contract on Base mainnet
-const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
+// USDC contract on Base Sepolia testnet
+const USDC_BASE_SEPOLIA =
+  "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
 
 // Standard ERC20 ABI for transfer
 const ERC20_ABI = [
@@ -72,7 +73,7 @@ export function useCreatorTipping() {
 
         // Check Sub Account's USDC balance
         const balance = (await publicClient.readContract({
-          address: USDC_BASE,
+          address: USDC_BASE_SEPOLIA,
           abi: ERC20_ABI,
           functionName: "balanceOf",
           args: [subAccount.address as Address],
@@ -96,7 +97,7 @@ export function useCreatorTipping() {
         // Execute tip via Sub Account
         const callsId = await executeFromSubAccount([
           {
-            to: USDC_BASE,
+            to: USDC_BASE_SEPOLIA,
             data: transferData,
             value: "0", // No ETH needed for USDC transfer
           },
@@ -128,7 +129,7 @@ export function useCreatorTipping() {
 
     try {
       const balance = (await publicClient.readContract({
-        address: USDC_BASE,
+        address: USDC_BASE_SEPOLIA,
         abi: ERC20_ABI,
         functionName: "balanceOf",
         args: [subAccount.address as Address],
@@ -167,6 +168,6 @@ export function useCreatorTipping() {
     tipCreator,
     quickTip,
     getUSDCBalance,
-    USDC_CONTRACT: USDC_BASE,
+    USDC_CONTRACT: USDC_BASE_SEPOLIA,
   };
 }

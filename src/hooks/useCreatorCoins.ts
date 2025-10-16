@@ -79,7 +79,7 @@ export function useCreatorCoins(feedType: FeedType = "new") {
             totalSupply: edge.node.totalSupply || "0",
             uniqueHolders: edge.node.uniqueHolders || 0,
             createdAt: edge.node.createdAt || new Date().toISOString(),
-            chainId: edge.node.chainId || 8453, // Base mainnet
+            chainId: edge.node.chainId || 84532, // Base Sepolia
           })
         );
 
