@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { SignInWithBaseButton } from "@base-org/account-ui/react";
 
 import { useSubAccount } from "@/hooks/useSubAccount";
 import { useCreatorTipping } from "@/hooks/useCreatorTipping";
@@ -9,7 +8,7 @@ import { useSpendPermissions } from "@/hooks/useSpendPermissions";
 import { SubAccountSetup } from "@/components/SubAccountSetup";
 import { CreatorCoinsFeed } from "@/components/CreatorCoinsFeed";
 import { DebugPanel } from "@/components/DebugPanel";
-import { SpendPermissionSetup } from "@/components/SpendPermissionSetup";
+
 import type { CreatorCoin } from "@/hooks/useCreatorCoins";
 
 export default function Home() {
@@ -22,6 +21,7 @@ export default function Home() {
     connectBaseAccount,
     createSubAccount,
     provider,
+    sdk,
     isConnected,
     fundSubAccount,
     getSubAccountBalance,
@@ -34,17 +34,16 @@ export default function Home() {
   const {
     permissionStatus,
     requestSpendPermissionFlow,
+    executeSpendTip,
     canTipAmount,
-    deductFromAllowance,
   } = useSpendPermissions(
-    provider,
+    sdk,
     universalAddress || undefined, // User's main address
     subAccount?.address // Sub account as spender
   );
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
-  const [showSpendPermissionSetup, setShowSpendPermissionSetup] =
-    useState(false);
+
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
   const [notifications, setNotifications] = useState<
@@ -128,20 +127,18 @@ export default function Home() {
           `🚀 Instant tip: ${tipAmount} ETH to ${coin.name} via spend permission...`
         );
 
-        // Execute instant tip via Sub Account (no wallet popup)
-        const result = await tipCreator(
+        // Execute instant tip using spend permission (should be seamless)
+        const result = await executeSpendTip(
           coin.creatorAddress as `0x${string}`,
           tipAmount
         );
 
         if (result.success) {
-          // Deduct from allowance
-          deductFromAllowance(tipAmount);
-
           showNotification(
             "success",
-            `🎉 Instant tip successful! ${result.amount} to ${coin.name} - No wallet pop-ups!`
+            `🎉 Instant tip successful! ${tipAmount} ETH to ${coin.name} - No wallet pop-ups!`
           );
+          console.log("Instant tip transaction hash:", result.txHash);
 
           // Refresh balance
           try {
@@ -159,55 +156,100 @@ export default function Home() {
         return;
       }
 
-      // Fall back to regular Sub Account tipping (this will require wallet confirmation first time)
+      // No spend permission - request it first (this will show the Base wallet modal with checkbox)
       showNotification(
         "info",
-        `Tipping ${coin.name} creator ${tipAmount} ETH via Sub Account...`
+        `🔐 First tip: Requesting spend permission for seamless future tips...`
       );
 
-      // Check balance first using the working balance source
-      const balanceHex = await getSubAccountBalance();
-      const balance =
-        balanceHex && typeof balanceHex === "string"
-          ? Number(BigInt(balanceHex)) / 1e18
-          : 0;
+      const permissionResult = await requestSpendPermissionFlow(0.1, 30); // 0.1 ETH allowance for 30 days
 
-      // tipAmount is now direct ETH amount
-      if (balance < tipAmount) {
-        showNotification(
-          "error",
-          `Insufficient ETH balance. You have ${balance.toFixed(
-            4
-          )} ETH, need ${tipAmount.toFixed(4)} ETH`
-        );
-        return;
-      }
-
-      // Execute the tip via Sub Account
-      const result = await tipCreator(
-        coin.creatorAddress as `0x${string}`,
-        tipAmount
-      );
-
-      if (result.success) {
+      if (permissionResult.success) {
         showNotification(
           "success",
-          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator!`
+          `🎉 Spend permission granted! Now executing your tip...`
         );
-        console.log("Tip transaction hash:", result.txHash);
 
-        // Refresh balance after successful tip
-        try {
-          const balanceHex = await getSubAccountBalance();
-          if (balanceHex && typeof balanceHex === "string") {
-            const newBalance = Number(BigInt(balanceHex)) / 1e18;
-            setUsdcBalance(newBalance);
+        // Now execute the tip using the new permission
+        const result = await executeSpendTip(
+          coin.creatorAddress as `0x${string}`,
+          tipAmount
+        );
+
+        if (result.success) {
+          showNotification(
+            "success",
+            `🎉 Tip successful! ${tipAmount} ETH to ${coin.name} - Future tips will be instant!`
+          );
+          console.log("First tip transaction hash:", result.txHash);
+
+          // Refresh balance
+          try {
+            const balanceHex = await getSubAccountBalance();
+            if (balanceHex && typeof balanceHex === "string") {
+              const newBalance = Number(BigInt(balanceHex)) / 1e18;
+              setUsdcBalance(newBalance);
+            }
+          } catch (error) {
+            console.error("Failed to refresh balance:", error);
           }
-        } catch (error) {
-          console.error("Failed to refresh balance:", error);
+        } else {
+          throw new Error(
+            result.error || "Tip failed after permission granted"
+          );
         }
+        return;
       } else {
-        throw new Error(result.error || "Tip failed");
+        // Permission was declined, fall back to regular Sub Account tipping
+        showNotification(
+          "info",
+          `Spend permission declined. Using regular Sub Account tipping...`
+        );
+
+        // Check balance first using the working balance source
+        const balanceHex = await getSubAccountBalance();
+        const balance =
+          balanceHex && typeof balanceHex === "string"
+            ? Number(BigInt(balanceHex)) / 1e18
+            : 0;
+
+        // tipAmount is now direct ETH amount
+        if (balance < tipAmount) {
+          showNotification(
+            "error",
+            `Insufficient ETH balance. You have ${balance.toFixed(
+              4
+            )} ETH, need ${tipAmount.toFixed(4)} ETH`
+          );
+          return;
+        }
+
+        // Execute the tip via Sub Account
+        const result = await tipCreator(
+          coin.creatorAddress as `0x${string}`,
+          tipAmount
+        );
+
+        if (result.success) {
+          showNotification(
+            "success",
+            `🎉 Successfully tipped ${result.amount} to ${coin.name} creator!`
+          );
+          console.log("Tip transaction hash:", result.txHash);
+
+          // Refresh balance after successful tip
+          try {
+            const balanceHex = await getSubAccountBalance();
+            if (balanceHex && typeof balanceHex === "string") {
+              const newBalance = Number(BigInt(balanceHex)) / 1e18;
+              setUsdcBalance(newBalance);
+            }
+          } catch (error) {
+            console.error("Failed to refresh balance:", error);
+          }
+        } else {
+          throw new Error(result.error || "Tip failed");
+        }
       }
     } catch (error) {
       console.error("Tip failed:", error);
@@ -287,7 +329,12 @@ export default function Home() {
 
             {/* CTA */}
             <div className="space-y-4">
-              <SignInWithBaseButton onClick={handleSignInWithBase} />
+              <button
+                onClick={handleSignInWithBase}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+              >
+                🔗 Connect Base Wallet
+              </button>
               <p className="text-sm text-gray-500">
                 Powered by Base Sub Accounts • Secure & Gasless
               </p>
@@ -494,13 +541,10 @@ export default function Home() {
             ) : (
               <div>
                 <div className="text-2xl font-bold text-orange-600">⚡</div>
-                <div className="text-sm text-gray-600">Enable Zero-Popup</div>
-                <button
-                  onClick={() => setShowSpendPermissionSetup(true)}
-                  className="text-xs text-purple-600 hover:text-purple-700 mt-1 underline"
-                >
-                  Setup Now
-                </button>
+                <div className="text-sm text-gray-600">Zero-Popup Tipping</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Enabled automatically on first tip
+                </div>
               </div>
             )}
           </div>
@@ -544,34 +588,6 @@ export default function Home() {
         fundSubAccount={fundSubAccount}
         getSubAccountBalance={getSubAccountBalance}
       />
-
-      {/* Spend Permission Setup Modal */}
-      {showSpendPermissionSetup &&
-        universalAddress &&
-        subAccount &&
-        provider && (
-          <SpendPermissionSetup
-            isOpen={showSpendPermissionSetup}
-            onClose={() => setShowSpendPermissionSetup(false)}
-            provider={
-              provider as {
-                request: (args: {
-                  method: string;
-                  params: unknown[];
-                }) => Promise<unknown>;
-              }
-            }
-            userAddress={universalAddress}
-            spenderAddress={subAccount.address}
-            onPermissionGranted={(permission) => {
-              console.log("Spend permission granted:", permission);
-              showNotification(
-                "success",
-                "🎉 Spend permission granted! You can now tip instantly without wallet pop-ups!"
-              );
-            }}
-          />
-        )}
     </div>
   );
 }

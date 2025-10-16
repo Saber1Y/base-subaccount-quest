@@ -2,45 +2,32 @@
 
 import { useState, useCallback } from "react";
 import { Address, parseUnits } from "viem";
-import { requestSpendPermission } from "@base-org/account/spend-permission";
-import { baseAccountSDKConfig } from "@/lib/config";
-
-interface Provider {
-  request: (args: { method: string; params: unknown[] }) => Promise<unknown>;
-}
-
-export interface SpendPermission {
-  account: Address;
-  spender: Address;
-  token: Address;
-  allowance: bigint;
-  start: number;
-  end: number;
-  salt?: bigint;
-  extraData?: `0x${string}`;
-}
+import {
+  requestSpendPermission,
+  prepareSpendCallData,
+  getPermissionStatus,
+  requestRevoke,
+  prepareRevokeCallData,
+} from "@base-org/account/spend-permission/browser";
+import { baseSepolia } from "viem/chains";
 
 export interface SpendPermissionStatus {
   hasPermission: boolean;
-  permission?: SpendPermission;
+  permission?: unknown;
   allowance?: bigint;
   isLoading: boolean;
 }
 
-const permission = await requestSpendPermission({
-  account: "0x...",
-  spender: "0x...",
-  token: "0x...",
-  chainId: 8453, // or any other supported chain
-  allowance: 1_000_000n,
-  periodInDays: 30,
-  provider: baseAccountSDKConfig.getProvider(),
-});
+interface BaseSDK {
+  getProvider: () => {
+    request: (args: { method: string; params: unknown[] }) => Promise<unknown>;
+  };
+}
 
 export function useSpendPermissions(
-  provider: Provider | null,
-  userAddress?: Address, // The user's main address
-  spenderAddress?: Address // The app's spender address (can be sub account)
+  sdk: BaseSDK | null,
+  userAddress?: Address,
+  spenderAddress?: Address
 ) {
   const [permissionStatus, setPermissionStatus] =
     useState<SpendPermissionStatus>({
@@ -48,15 +35,11 @@ export function useSpendPermissions(
       isLoading: false,
     });
 
-  console.log("Spend Permission:", permission);
-
-  // ETH token address (0x0 for native ETH)
-  const ETH_TOKEN_ADDRESS =
-    "0x0000000000000000000000000000000000000000" as Address;
+  // Use Base Sepolia USDC for reliable spend permissions
+  const USDC_TOKEN_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
 
   /**
-   * Request a new spend permission for ETH tipping
-   * This will be used to create a seamless tipping experience
+   * Request a new spend permission for ETH tipping using Base SDK
    */
   const requestSpendPermissionFlow = useCallback(
     async (
@@ -64,10 +47,10 @@ export function useSpendPermissions(
       periodInDays: number = 30 // Default 30 days
     ): Promise<{
       success: boolean;
-      permission?: SpendPermission;
+      permission?: unknown;
       error?: string;
     }> => {
-      if (!provider || !userAddress || !spenderAddress) {
+      if (!sdk || !userAddress || !spenderAddress) {
         return { success: false, error: "Missing required parameters" };
       }
 
@@ -80,36 +63,35 @@ export function useSpendPermissions(
           "days"
         );
 
-        // Convert ETH to wei
-        const allowanceWei = parseUnits(allowanceEth.toString(), 18);
+        // Convert to USDC units (6 decimals) - use a reasonable USDC amount
+        const allowanceUsdc = parseUnits((allowanceEth * 10).toString(), 6); // Convert 0.1 ETH -> 1 USDC equivalent
+        const provider = sdk.getProvider();
 
-        // Set permission start and end times
-        const start = Math.floor(Date.now() / 1000);
-        const end = start + periodInDays * 24 * 60 * 60;
-
-        // For now, simulate the permission since we'll integrate with Sub Account
-        // In a real implementation, this would call the Base SDK requestSpendPermission
-        const permission: SpendPermission = {
+        // Use the actual Base SDK requestSpendPermission function
+        const permission = await requestSpendPermission({
           account: userAddress,
           spender: spenderAddress,
-          token: ETH_TOKEN_ADDRESS,
-          allowance: allowanceWei,
-          start,
-          end,
-          salt: BigInt(Math.floor(Math.random() * 1000000)),
-          extraData: "0x" as `0x${string}`,
-        };
+          token: USDC_TOKEN_ADDRESS,
+          chainId: baseSepolia.id,
+          allowance: allowanceUsdc,
+          periodInDays,
+          provider: provider as never, // Type workaround for provider compatibility
+        });
 
-        // Update local state
-        const newStatus = {
-          hasPermission: true,
-          permission,
-          allowance: allowanceWei,
-          isLoading: false,
-        };
-        setPermissionStatus(newStatus);
+        if (permission) {
+          // Update local state
+          const newStatus = {
+            hasPermission: true,
+            permission,
+            allowance: allowanceUsdc,
+            isLoading: false,
+          };
+          setPermissionStatus(newStatus);
 
-        return { success: true, permission };
+          return { success: true, permission };
+        } else {
+          return { success: false, error: "Permission request was declined" };
+        }
       } catch (error) {
         console.error("Failed to request spend permission:", error);
         return {
@@ -121,16 +103,84 @@ export function useSpendPermissions(
         };
       }
     },
-    [provider, userAddress, spenderAddress, ETH_TOKEN_ADDRESS]
+    [sdk, userAddress, spenderAddress]
   );
 
   /**
-   * Check if we have an existing spend permission
+   * Execute a spend using an existing permission (zero wallet popups)
    */
-  const checkSpendPermission =
-    useCallback(async (): Promise<SpendPermissionStatus> => {
-      return permissionStatus;
-    }, [permissionStatus]);
+  const executeSpendTip = useCallback(
+    async (
+      recipient: Address,
+      amountEth: number
+    ): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+      if (!sdk || !spenderAddress) {
+        return { success: false, error: "Missing required parameters" };
+      }
+
+      if (!permissionStatus.hasPermission || !permissionStatus.permission) {
+        return { success: false, error: "No spend permission available" };
+      }
+
+      try {
+        console.log("Executing spend of", amountEth, "ETH to", recipient);
+
+        // Convert ETH to wei
+        const amountWei = parseUnits(amountEth.toString(), 18);
+
+        // Check if amount exceeds allowance
+        if (
+          permissionStatus.allowance &&
+          amountWei > permissionStatus.allowance
+        ) {
+          return {
+            success: false,
+            error: `Amount (${amountEth} ETH) exceeds allowance (${
+              Number(permissionStatus.allowance) / 1e18
+            } ETH)`,
+          };
+        }
+
+        const provider = sdk.getProvider();
+
+        // Prepare spend call data using Base SDK
+        const spendCalls = await prepareSpendCallData(
+          permissionStatus.permission as never,
+          amountWei,
+          recipient
+        );
+
+        // Execute using wallet_sendCalls for atomic batch transaction
+        const result = await provider.request({
+          method: "wallet_sendCalls",
+          params: [
+            {
+              version: "2.0",
+              atomicRequired: true,
+              from: spenderAddress,
+              calls: spendCalls,
+            },
+          ],
+        });
+
+        // Update allowance (subtract spent amount)
+        setPermissionStatus((prev) => ({
+          ...prev,
+          allowance: prev.allowance ? prev.allowance - amountWei : BigInt(0),
+        }));
+
+        return { success: true, txHash: result as string };
+      } catch (error) {
+        console.error("Failed to execute spend:", error);
+        return {
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Spend execution failed",
+        };
+      }
+    },
+    [sdk, spenderAddress, permissionStatus]
+  );
 
   /**
    * Check if a tip amount is within the allowance
@@ -148,15 +198,12 @@ export function useSpendPermissions(
   );
 
   /**
-   * Deduct an amount from the allowance (to be called after successful tip)
+   * Check for existing spend permission
    */
-  const deductFromAllowance = useCallback((amountEth: number) => {
-    const amountWei = parseUnits(amountEth.toString(), 18);
-    setPermissionStatus((prev) => ({
-      ...prev,
-      allowance: prev.allowance ? prev.allowance - amountWei : BigInt(0),
-    }));
-  }, []);
+  const checkSpendPermission =
+    useCallback(async (): Promise<SpendPermissionStatus> => {
+      return permissionStatus;
+    }, [permissionStatus]);
 
   /**
    * Reset/revoke the permission
@@ -171,9 +218,9 @@ export function useSpendPermissions(
   return {
     permissionStatus,
     requestSpendPermissionFlow,
+    executeSpendTip,
     checkSpendPermission,
     canTipAmount,
-    deductFromAllowance,
     revokePermission,
   };
 }
