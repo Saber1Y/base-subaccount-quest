@@ -30,15 +30,21 @@ export default function Home() {
 
   const { tipCreator } = useCreatorTipping(subAccount, executeFromSubAccount);
 
-  // Initialize spend permissions hook with Sub Account as spender
-  const spendPermissions = useSpendPermissions(
+  // Spend permissions for seamless tipping
+  const {
+    permissionStatus,
+    requestSpendPermissionFlow,
+    canTipAmount,
+    deductFromAllowance,
+  } = useSpendPermissions(
     provider,
-    universalAddress as `0x${string}` | null,
-    subAccount?.address as `0x${string}` || universalAddress as `0x${string}` // Use Sub Account as spender
+    universalAddress || undefined, // User's main address
+    subAccount?.address // Sub account as spender
   );
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
-  const [showSpendPermissionSetup, setShowSpendPermissionSetup] = useState(false);
+  const [showSpendPermissionSetup, setShowSpendPermissionSetup] =
+    useState(false);
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
   const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
   const [notifications, setNotifications] = useState<
@@ -114,70 +120,46 @@ export default function Home() {
     setTradingCoin(coin.id);
     try {
       console.log(`Tipping creator ${coin.name} with ${tipAmount} ETH`);
-      
-      // Convert tip amount to wei for spend permission checks
-      const tipAmountWei = BigInt(Math.floor(tipAmount * 1e18));
 
-      // First, try to find a suitable spend permission
-      const permission = await spendPermissions.findSuitablePermission(tipAmountWei);
-
-      if (permission) {
-        // Use zero-popup spend permission
+      // Check if we have spend permission and amount is within allowance
+      if (permissionStatus.hasPermission && canTipAmount(tipAmount)) {
         showNotification(
           "info",
-          `💫 Using spend permission - tipping ${coin.name} with no wallet pop-ups!`
+          `🚀 Instant tip: ${tipAmount} ETH to ${coin.name} via spend permission...`
         );
 
-        try {
-          // Execute spend permission to transfer ETH directly from Base Account to creator
-          const txHash = await spendPermissions.executeTipWithPermission(
-            permission,
-            tipAmountWei,
-            coin.creatorAddress as `0x${string}`
-          );
+        // Execute instant tip via Sub Account (no wallet popup)
+        const result = await tipCreator(
+          coin.creatorAddress as `0x${string}`,
+          tipAmount
+        );
+
+        if (result.success) {
+          // Deduct from allowance
+          deductFromAllowance(tipAmount);
 
           showNotification(
             "success",
-            `🎉 Successfully tipped ${tipAmount} ETH to ${coin.name} creator using spend permission! Zero pop-ups!`
+            `🎉 Instant tip successful! ${result.amount} to ${coin.name} - No wallet pop-ups!`
           );
-          console.log("Spend permission tip transaction hash:", txHash);
 
-          // Refresh balance after successful tip
-          setTimeout(async () => {
-            try {
-              const balanceHex = await getSubAccountBalance();
-              if (balanceHex && typeof balanceHex === "string") {
-                const newBalance = Number(BigInt(balanceHex)) / 1e18;
-                setUsdcBalance(newBalance);
-              }
-            } catch (error) {
-              console.error("Failed to refresh balance:", error);
+          // Refresh balance
+          try {
+            const balanceHex = await getSubAccountBalance();
+            if (balanceHex && typeof balanceHex === "string") {
+              const newBalance = Number(BigInt(balanceHex)) / 1e18;
+              setUsdcBalance(newBalance);
             }
-          }, 2000); // Wait a bit for blockchain confirmation
-
-          return;
-        } catch (spendError) {
-          console.error("Spend permission failed, falling back to regular tip:", spendError);
-          showNotification(
-            "info",
-            "Spend permission failed, trying regular tip..."
-          );
-          // Fall through to regular tipping logic
+          } catch (error) {
+            console.error("Failed to refresh balance:", error);
+          }
+        } else {
+          throw new Error(result.error || "Instant tip failed");
         }
-      } else {
-        // No suitable permission found - check if we should show permission setup
-        if (spendPermissions.permissions.length === 0) {
-          showNotification(
-            "info",
-            "💡 Set up spend permissions for zero-popup tipping!"
-          );
-          setShowSpendPermissionSetup(true);
-          setTradingCoin(null);
-          return;
-        }
+        return;
       }
 
-      // Fallback to regular Sub Account tipping
+      // Fall back to regular Sub Account tipping (this will require wallet confirmation first time)
       showNotification(
         "info",
         `Tipping ${coin.name} creator ${tipAmount} ETH via Sub Account...`
@@ -210,9 +192,9 @@ export default function Home() {
       if (result.success) {
         showNotification(
           "success",
-          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator via Sub Account!`
+          `🎉 Successfully tipped ${result.amount} to ${coin.name} creator!`
         );
-        console.log("Sub Account tip transaction hash:", result.txHash);
+        console.log("Tip transaction hash:", result.txHash);
 
         // Refresh balance after successful tip
         try {
@@ -482,7 +464,7 @@ export default function Home() {
       {/* Main Content */}
       <main className="flex-1 max-w-6xl mx-auto px-4 py-8 w-full">
         {/* Stats */}
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
+        <div className="grid md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             <div className="text-2xl font-bold text-gray-900">0</div>
             <div className="text-sm text-gray-600">Wallet Pop-ups</div>
@@ -494,6 +476,33 @@ export default function Home() {
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             <div className="text-2xl font-bold text-purple-600">Support</div>
             <div className="text-sm text-gray-600">Creators</div>
+          </div>
+          {/* Spend Permission Status */}
+          <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
+            {permissionStatus.hasPermission ? (
+              <div>
+                <div className="text-2xl font-bold text-green-600">✅</div>
+                <div className="text-sm text-gray-600">Zero-Popup Mode</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {permissionStatus.allowance
+                    ? `${(Number(permissionStatus.allowance) / 1e18).toFixed(
+                        3
+                      )} ETH left`
+                    : "Active"}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-2xl font-bold text-orange-600">⚡</div>
+                <div className="text-sm text-gray-600">Enable Zero-Popup</div>
+                <button
+                  onClick={() => setShowSpendPermissionSetup(true)}
+                  className="text-xs text-purple-600 hover:text-purple-700 mt-1 underline"
+                >
+                  Setup Now
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -537,18 +546,32 @@ export default function Home() {
       />
 
       {/* Spend Permission Setup Modal */}
-      {showSpendPermissionSetup && (
-        <SpendPermissionSetup
-          provider={provider}
-          userBaseAccount={universalAddress as `0x${string}`}
-          appSpenderAddress={subAccount?.address as `0x${string}` || universalAddress as `0x${string}`} // Use Sub Account as spender
-          onPermissionGranted={() => {
-            setShowSpendPermissionSetup(false);
-            showNotification("success", "🎉 Spend permissions set up! You can now tip with zero pop-ups!");
-          }}
-          onCancel={() => setShowSpendPermissionSetup(false)}
-        />
-      )}
+      {showSpendPermissionSetup &&
+        universalAddress &&
+        subAccount &&
+        provider && (
+          <SpendPermissionSetup
+            isOpen={showSpendPermissionSetup}
+            onClose={() => setShowSpendPermissionSetup(false)}
+            provider={
+              provider as {
+                request: (args: {
+                  method: string;
+                  params: unknown[];
+                }) => Promise<unknown>;
+              }
+            }
+            userAddress={universalAddress}
+            spenderAddress={subAccount.address}
+            onPermissionGranted={(permission) => {
+              console.log("Spend permission granted:", permission);
+              showNotification(
+                "success",
+                "🎉 Spend permission granted! You can now tip instantly without wallet pop-ups!"
+              );
+            }}
+          />
+        )}
     </div>
   );
 }
