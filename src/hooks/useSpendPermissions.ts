@@ -6,8 +6,6 @@ import {
   requestSpendPermission,
   prepareSpendCallData,
   getPermissionStatus,
-  requestRevoke,
-  prepareRevokeCallData,
 } from "@base-org/account/spend-permission/browser";
 import { baseSepolia } from "viem/chains";
 
@@ -16,6 +14,7 @@ export interface SpendPermissionStatus {
   permission?: unknown;
   allowance?: bigint;
   isLoading: boolean;
+  startTime?: number; // Add start time tracking
 }
 
 interface BaseSDK {
@@ -35,16 +34,17 @@ export function useSpendPermissions(
       isLoading: false,
     });
 
-  // Use Base Sepolia USDC for reliable spend permissions
-  const USDC_TOKEN_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as Address;
+  // ETH token address - ERC-7528 format for Base
+  const ETH_TOKEN_ADDRESS =
+    "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" as Address;
 
   /**
    * Request a new spend permission for ETH tipping using Base SDK
    */
   const requestSpendPermissionFlow = useCallback(
     async (
-      allowanceEth: number = 0.1, // Default 0.1 ETH allowance
-      periodInDays: number = 30 // Default 30 days
+      allowanceEth: number = 0.1,
+      periodInDays: number = 30
     ): Promise<{
       success: boolean;
       permission?: unknown;
@@ -63,31 +63,52 @@ export function useSpendPermissions(
           "days"
         );
 
-        // Convert to USDC units (6 decimals) - use a reasonable USDC amount
-        const allowanceUsdc = parseUnits((allowanceEth * 10).toString(), 6); // Convert 0.1 ETH -> 1 USDC equivalent
+        const allowanceWei = parseUnits(allowanceEth.toString(), 18);
         const provider = sdk.getProvider();
 
-        // Use the actual Base SDK requestSpendPermission function
+        console.log("Requesting with params:", {
+          account: userAddress,
+          spender: spenderAddress,
+          token: ETH_TOKEN_ADDRESS,
+          chainId: baseSepolia.id,
+          allowance: allowanceWei.toString(),
+          periodInDays,
+        });
+
+        // Use the SDK exactly as documented - it handles all timing automatically
         const permission = await requestSpendPermission({
           account: userAddress,
           spender: spenderAddress,
-          token: USDC_TOKEN_ADDRESS,
+          token: ETH_TOKEN_ADDRESS,
           chainId: baseSepolia.id,
-          allowance: allowanceUsdc,
-          periodInDays,
-          provider: provider as never, // Type workaround for provider compatibility
+          allowance: allowanceWei,
+          periodInDays, // Use periodInDays parameter (not period, start, end)
+          provider: provider as never,
         });
 
         if (permission) {
-          // Update local state
+          // Extract start time from permission to track when it becomes active
+          const permissionData = permission as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+          const startTime = permissionData?.start || 0;
+
           const newStatus = {
             hasPermission: true,
             permission,
-            allowance: allowanceUsdc,
+            allowance: allowanceWei,
             isLoading: false,
+            startTime, // Store when permission becomes active
           };
           setPermissionStatus(newStatus);
 
+          console.log("Spend permission granted successfully!", {
+            ...newStatus,
+            startTime,
+            currentTime: Math.floor(Date.now() / 1000),
+            secondsUntilActive: Math.max(
+              0,
+              startTime - Math.floor(Date.now() / 1000)
+            ),
+          });
           return { success: true, permission };
         } else {
           return { success: false, error: "Permission request was declined" };
@@ -107,50 +128,97 @@ export function useSpendPermissions(
   );
 
   /**
-   * Execute a spend using an existing permission (zero wallet popups)
+   * Execute a tip using spend permission following the docs pattern exactly
    */
   const executeSpendTip = useCallback(
     async (
       recipient: Address,
-      amountEth: number
+      amountEth: number,
+      customPermission?: unknown
     ): Promise<{ success: boolean; txHash?: string; error?: string }> => {
       if (!sdk || !spenderAddress) {
         return { success: false, error: "Missing required parameters" };
       }
 
-      if (!permissionStatus.hasPermission || !permissionStatus.permission) {
+      const permission = customPermission || permissionStatus.permission;
+      
+      if (!permission) {
         return { success: false, error: "No spend permission available" };
       }
 
       try {
-        console.log("Executing spend of", amountEth, "ETH to", recipient);
-
-        // Convert ETH to wei
+        console.log("Executing tip of", amountEth, "ETH to", recipient);
         const amountWei = parseUnits(amountEth.toString(), 18);
+        const provider = sdk.getProvider();
 
-        // Check if amount exceeds allowance
-        if (
-          permissionStatus.allowance &&
-          amountWei > permissionStatus.allowance
-        ) {
-          return {
-            success: false,
-            error: `Amount (${amountEth} ETH) exceeds allowance (${
-              Number(permissionStatus.allowance) / 1e18
-            } ETH)`,
+        // Check the status of permission with timing retry logic
+        let isActive = false;
+        let remainingSpend = BigInt(0);
+        
+        try {
+          const permissionStatus = await getPermissionStatus(permission as never);
+          isActive = permissionStatus.isActive;
+          remainingSpend = permissionStatus.remainingSpend;
+          
+          console.log("Permission status:", { isActive, remainingSpend: remainingSpend.toString() });
+          
+        } catch (error) {
+          console.error("Failed to check permission status:", error);
+          
+          // Check if it's a timing error
+          if (error instanceof Error && error.message.includes("BeforeSpendPermissionStart")) {
+            console.log("Permission not yet active, extracting timing info...");
+            
+            // Extract timestamps from error message
+            const match = error.message.match(/\((\d+),\s*(\d+)\)/);
+            if (match) {
+              const currentTime = parseInt(match[1]);
+              const startTime = parseInt(match[2]);
+              const waitTime = (startTime - currentTime) * 1000; // Convert to milliseconds
+              
+              console.log(`Permission will be active in ${waitTime / 1000} seconds`);
+              
+              if (waitTime > 0 && waitTime < 120000) { // Only wait up to 2 minutes
+                return { 
+                  success: false, 
+                  error: `Permission activating in ${Math.ceil(waitTime / 1000)} seconds. Please try again in a moment.` 
+                };
+              }
+            }
+          }
+          
+          return { 
+            success: false, 
+            error: "Failed to check permission status" 
+          };
+        }
+        
+        if (!isActive || remainingSpend < amountWei) {
+          return { 
+            success: false, 
+            error: "No active spend permission with sufficient allowance" 
           };
         }
 
-        const provider = sdk.getProvider();
-
-        // Prepare spend call data using Base SDK
+        // Prepare the calls (following docs pattern) 
         const spendCalls = await prepareSpendCallData(
-          permissionStatus.permission as never,
-          amountWei,
-          recipient
+          permission as never,
+          amountWei
         );
 
-        // Execute using wallet_sendCalls for atomic batch transaction
+        console.log("Prepared spend calls:", spendCalls);
+
+        // Add tip transfer from spender to recipient
+        const tipCall = {
+          to: recipient,
+          value: `0x${amountWei.toString(16)}`,
+          data: "0x",
+        };
+
+        // Combine spend calls with tip transfer for atomic execution
+        const allCalls = [...spendCalls, tipCall];
+
+        // Execute the calls using wallet_sendCalls (following docs pattern)
         const result = await provider.request({
           method: "wallet_sendCalls",
           params: [
@@ -158,7 +226,7 @@ export function useSpendPermissions(
               version: "2.0",
               atomicRequired: true,
               from: spenderAddress,
-              calls: spendCalls,
+              calls: allCalls,
             },
           ],
         });
@@ -169,13 +237,14 @@ export function useSpendPermissions(
           allowance: prev.allowance ? prev.allowance - amountWei : BigInt(0),
         }));
 
+        console.log("Tip executed successfully:", result);
         return { success: true, txHash: result as string };
+
       } catch (error) {
-        console.error("Failed to execute spend:", error);
+        console.error("Failed to execute tip:", error);
         return {
           success: false,
-          error:
-            error instanceof Error ? error.message : "Spend execution failed",
+          error: error instanceof Error ? error.message : "Tip execution failed",
         };
       }
     },

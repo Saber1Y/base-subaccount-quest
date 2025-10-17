@@ -231,7 +231,7 @@ export function CreatorCoinCard({
 
         {/* View on Zora link */}
         <a
-          href={`https://zora.co/collect/base:${coin.address}`}
+          href={`https://zora.co/coin/base:${coin.address}?referrer=${coin.creatorAddress}`}
           target="_blank"
           rel="noopener noreferrer"
           className="block mt-2 text-center text-sm text-blue-600 hover:underline"

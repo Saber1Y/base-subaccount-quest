@@ -3,11 +3,9 @@
 import { useState, useEffect } from "react";
 
 import { useSubAccount } from "@/hooks/useSubAccount";
-import { useCreatorTipping } from "@/hooks/useCreatorTipping";
 import { useSpendPermissions } from "@/hooks/useSpendPermissions";
 import { SubAccountSetup } from "@/components/SubAccountSetup";
 import { CreatorCoinsFeed } from "@/components/CreatorCoinsFeed";
-import { DebugPanel } from "@/components/DebugPanel";
 
 import type { CreatorCoin } from "@/hooks/useCreatorCoins";
 
@@ -16,19 +14,12 @@ export default function Home() {
     subAccount,
     universalAddress,
     isCreating,
-    isLoading,
     status,
     connectBaseAccount,
     createSubAccount,
-    provider,
     sdk,
-    isConnected,
-    fundSubAccount,
     getSubAccountBalance,
-    executeFromSubAccount,
   } = useSubAccount();
-
-  const { tipCreator } = useCreatorTipping(subAccount, executeFromSubAccount);
 
   // Spend permissions for seamless tipping
   const {
@@ -39,7 +30,7 @@ export default function Home() {
   } = useSpendPermissions(
     sdk,
     universalAddress || undefined, // User's main address
-    subAccount?.address // Sub account as spender
+    universalAddress || undefined // Main address as spender for spend permissions
   );
 
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
@@ -70,7 +61,7 @@ export default function Home() {
           if (balance === 0) {
             showNotification(
               "info",
-              "💡 Fund your Sub Account with ETH to start tipping creators! Check the debug panel for instructions."
+              "💡 Connect your Base wallet to enable spend permissions for seamless tipping!"
             );
           }
         } else {
@@ -111,7 +102,7 @@ export default function Home() {
   };
 
   const handleTipCreator = async (coin: CreatorCoin, tipAmount: number) => {
-    if (!subAccount || !universalAddress) {
+    if (!universalAddress) {
       showNotification("error", "Please connect your Base Account first");
       return;
     }
@@ -124,10 +115,10 @@ export default function Home() {
       if (permissionStatus.hasPermission && canTipAmount(tipAmount)) {
         showNotification(
           "info",
-          `🚀 Instant tip: ${tipAmount} ETH to ${coin.name} via spend permission...`
+          ` Processing instant tip: ${tipAmount} ETH to ${coin.name}...`
         );
 
-        // Execute instant tip using spend permission (should be seamless)
+        // Execute instant tip using spend permission
         const result = await executeSpendTip(
           coin.creatorAddress as `0x${string}`,
           tipAmount
@@ -136,63 +127,108 @@ export default function Home() {
         if (result.success) {
           showNotification(
             "success",
-            `🎉 Instant tip successful! ${tipAmount} ETH to ${coin.name} - No wallet pop-ups!`
+            ` Instant tip successful! ${tipAmount} ETH to ${coin.name} - No wallet pop-ups!`
           );
           console.log("Instant tip transaction hash:", result.txHash);
-
-          // Refresh balance
-          try {
-            const balanceHex = await getSubAccountBalance();
-            if (balanceHex && typeof balanceHex === "string") {
-              const newBalance = Number(BigInt(balanceHex)) / 1e18;
-              setUsdcBalance(newBalance);
-            }
-          } catch (error) {
-            console.error("Failed to refresh balance:", error);
-          }
         } else {
           throw new Error(result.error || "Instant tip failed");
         }
         return;
       }
 
-      // No spend permission - request it first (this will show the Base wallet modal with checkbox)
+      // No spend permission - request it first
       showNotification(
         "info",
-        `🔐 First tip: Requesting spend permission for seamless future tips...`
+        ` Setting up zero-popup tipping (one-time setup)...`
       );
 
-      const permissionResult = await requestSpendPermissionFlow(0.1, 30); // 0.1 ETH allowance for 30 days
+      const permissionResult = await requestSpendPermissionFlow(0.1, 30);
 
       if (permissionResult.success) {
         showNotification(
           "success",
-          `🎉 Spend permission granted! Now executing your tip...`
+          ` Zero-popup mode enabled! Processing your tip...`
         );
 
-        // Now execute the tip using the new permission
-        const result = await executeSpendTip(
-          coin.creatorAddress as `0x${string}`,
-          tipAmount
-        );
+        // Retry logic for permission activation timing
+        const executeWithRetry = async (
+          maxRetries = 3
+        ): Promise<{ success: boolean; txHash?: string; error?: string }> => {
+          for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              showNotification(
+                "info",
+                ` Executing tip (attempt ${attempt}/${maxRetries})...`
+              );
+
+              const result = await executeSpendTip(
+                coin.creatorAddress as `0x${string}`,
+                tipAmount,
+                permissionResult.permission
+              );
+
+              if (result.success) {
+                return result;
+              } else if (
+                result.error?.includes("Permission activating in") ||
+                result.error?.includes("not yet active")
+              ) {
+                if (attempt < maxRetries) {
+                  // Try to extract specific wait time from error message
+                  let waitTime = 5000; // Default 5 seconds
+
+                  if (result.error?.includes("Permission activating in")) {
+                    const match = result.error.match(/(\d+)\s+seconds/);
+                    if (match) {
+                      const extractedWaitTime = parseInt(match[1]) * 1000;
+                      if (
+                        extractedWaitTime > 0 &&
+                        extractedWaitTime <= 120000
+                      ) {
+                        waitTime = extractedWaitTime + 2000; // Add 2 second buffer
+                      }
+                    }
+                  }
+
+                  showNotification(
+                    "info",
+                    `⏳ Permission not ready yet. Waiting ${Math.ceil(
+                      waitTime / 1000
+                    )} seconds... (${attempt}/${maxRetries})`
+                  );
+                  console.log(
+                    `Permission not ready yet. Retrying in ${
+                      waitTime / 1000
+                    } seconds... (${attempt}/${maxRetries})`
+                  );
+                  await new Promise((resolve) => setTimeout(resolve, waitTime));
+                  continue;
+                } else {
+                  throw new Error(result.error);
+                }
+              } else {
+                throw new Error(result.error || "Tip execution failed");
+              }
+            } catch (error) {
+              if (attempt === maxRetries) {
+                throw error;
+              }
+              console.log(`Attempt ${attempt} failed, retrying...`, error);
+            }
+          }
+
+          // If we reach here, all retries failed
+          return { success: false, error: "All retry attempts failed" };
+        };
+
+        const result = await executeWithRetry();
 
         if (result.success) {
           showNotification(
             "success",
-            `🎉 Tip successful! ${tipAmount} ETH to ${coin.name} - Future tips will be instant!`
+            `🎉 First tip complete! ${tipAmount} ETH to ${coin.name}. Future tips will be instant!`
           );
           console.log("First tip transaction hash:", result.txHash);
-
-          // Refresh balance
-          try {
-            const balanceHex = await getSubAccountBalance();
-            if (balanceHex && typeof balanceHex === "string") {
-              const newBalance = Number(BigInt(balanceHex)) / 1e18;
-              setUsdcBalance(newBalance);
-            }
-          } catch (error) {
-            console.error("Failed to refresh balance:", error);
-          }
         } else {
           throw new Error(
             result.error || "Tip failed after permission granted"
@@ -200,56 +236,11 @@ export default function Home() {
         }
         return;
       } else {
-        // Permission was declined, fall back to regular Sub Account tipping
         showNotification(
-          "info",
-          `Spend permission declined. Using regular Sub Account tipping...`
+          "error",
+          `❌ Spend permission required for tipping. Please try again and grant permission.`
         );
-
-        // Check balance first using the working balance source
-        const balanceHex = await getSubAccountBalance();
-        const balance =
-          balanceHex && typeof balanceHex === "string"
-            ? Number(BigInt(balanceHex)) / 1e18
-            : 0;
-
-        // tipAmount is now direct ETH amount
-        if (balance < tipAmount) {
-          showNotification(
-            "error",
-            `Insufficient ETH balance. You have ${balance.toFixed(
-              4
-            )} ETH, need ${tipAmount.toFixed(4)} ETH`
-          );
-          return;
-        }
-
-        // Execute the tip via Sub Account
-        const result = await tipCreator(
-          coin.creatorAddress as `0x${string}`,
-          tipAmount
-        );
-
-        if (result.success) {
-          showNotification(
-            "success",
-            `🎉 Successfully tipped ${result.amount} to ${coin.name} creator!`
-          );
-          console.log("Tip transaction hash:", result.txHash);
-
-          // Refresh balance after successful tip
-          try {
-            const balanceHex = await getSubAccountBalance();
-            if (balanceHex && typeof balanceHex === "string") {
-              const newBalance = Number(BigInt(balanceHex)) / 1e18;
-              setUsdcBalance(newBalance);
-            }
-          } catch (error) {
-            console.error("Failed to refresh balance:", error);
-          }
-        } else {
-          throw new Error(result.error || "Tip failed");
-        }
+        return;
       }
     } catch (error) {
       console.error("Tip failed:", error);
@@ -297,14 +288,14 @@ export default function Home() {
             </h1>
             <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
               Tip creators instantly with ETH using{" "}
-              <strong>zero wallet pop-ups</strong> via Base Sub Accounts
+              <strong>zero wallet pop-ups</strong> via Base Spend Permissions
             </p>
 
             {/* Value Proposition */}
             <div className="grid md:grid-cols-2 gap-8 mb-12 max-w-4xl mx-auto">
               <div className="bg-red-50 border border-red-200 rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-red-900 mb-3">
-                  ❌ Traditional Tipping
+                  Traditional Tipping
                 </h3>
                 <ul className="text-red-800 text-sm space-y-2">
                   <li>• Multiple wallet confirmations</li>
@@ -316,7 +307,7 @@ export default function Home() {
 
               <div className="bg-green-50 border border-green-200 rounded-xl p-6">
                 <h3 className="text-lg font-semibold text-green-900 mb-3">
-                  ✅ CreatorCoins Tipping
+                  CreatorCoins Tipping
                 </h3>
                 <ul className="text-green-800 text-sm space-y-2">
                   <li>• Zero wallet pop-ups</li>
@@ -333,10 +324,10 @@ export default function Home() {
                 onClick={handleSignInWithBase}
                 className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
               >
-                🔗 Connect Base Wallet
+                Connect Base Wallet
               </button>
               <p className="text-sm text-gray-500">
-                Powered by Base Sub Accounts • Secure & Gasless
+                Powered by Base Spend Permissions • Secure & Gasless
               </p>
             </div>
           </div>
@@ -390,14 +381,14 @@ export default function Home() {
               Ready to start tipping creators? 🚀
             </h2>
             <p className="text-gray-600 mb-8">
-              Set up your Sub Account to enable instant, pop-up-free ETH
+              Set up your Base wallet to enable instant, pop-up-free ETH
               tipping. This one-time setup takes less than 2 minutes.
             </p>
             <button
               onClick={() => setShowSubAccountSetup(true)}
               className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
             >
-              Set Up Sub Account
+              Connect Base Wallet
             </button>
           </div>
         </div>
@@ -410,19 +401,6 @@ export default function Home() {
             onCreateSubAccount={createSubAccount}
           />
         )}
-
-        {/* Debug Panel - ALWAYS SHOW when connected */}
-        <DebugPanel
-          subAccount={subAccount}
-          universalAddress={universalAddress}
-          provider={provider}
-          status={status}
-          isConnected={isConnected}
-          isLoading={isLoading}
-          isCreating={isCreating}
-          fundSubAccount={fundSubAccount}
-          getSubAccountBalance={getSubAccountBalance}
-        />
       </div>
     );
   }
@@ -440,7 +418,7 @@ export default function Home() {
             <div className="flex items-center gap-4">
               <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2">
                 <div className="text-xs text-green-600 font-medium">
-                  ⚡ Sub Account ETH (Testnet)
+                  Wallet Balance (Testnet)
                 </div>
                 <div className="text-sm font-bold text-green-900">
                   {usdcBalance !== null ? (
@@ -452,9 +430,7 @@ export default function Home() {
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
-                <div className="text-xs text-blue-600 font-medium">
-                  Sub Account
-                </div>
+                <div className="text-xs text-blue-600 font-medium">Wallet</div>
                 <div className="text-sm font-bold text-blue-900">
                   {subAccount.address.slice(0, 6)}...
                   {subAccount.address.slice(-4)}
@@ -497,9 +473,9 @@ export default function Home() {
             >
               <div className="flex items-start gap-2">
                 <span className="text-lg">
-                  {notification.type === "success" ? "✅" : ""}
-                  {notification.type === "error" ? "❌" : ""}
-                  {notification.type === "info" ? "ℹ️" : ""}
+                  {notification.type === "success" ? "" : ""}
+                  {notification.type === "error" ? "" : ""}
+                  {notification.type === "info" ? "" : ""}
                 </span>
                 <p className="text-sm font-medium">{notification.message}</p>
               </div>
@@ -528,7 +504,7 @@ export default function Home() {
           <div className="bg-white rounded-xl shadow-sm border p-6 text-center">
             {permissionStatus.hasPermission ? (
               <div>
-                <div className="text-2xl font-bold text-green-600">✅</div>
+                <div className="text-2xl font-bold text-green-600"></div>
                 <div className="text-sm text-gray-600">Zero-Popup Mode</div>
                 <div className="text-xs text-gray-500 mt-1">
                   {permissionStatus.allowance
@@ -569,25 +545,10 @@ export default function Home() {
 
         {/* Footer */}
         <div className="text-center py-8 text-gray-500 text-sm">
-          <p>Powered by Base Sub Accounts + ETH</p>
-          <p className="mt-2">
-            Support creators instantly with zero friction 💜
-          </p>
+          <p>Powered by Base Spend Permissions + ETH</p>
+          <p className="mt-2">Support creators instantly with zero friction</p>
         </div>
       </main>
-
-      {/* Debug Panel - ALWAYS at bottom */}
-      <DebugPanel
-        subAccount={subAccount}
-        universalAddress={universalAddress}
-        provider={provider}
-        status={status}
-        isConnected={isConnected}
-        isLoading={isLoading}
-        isCreating={isCreating}
-        fundSubAccount={fundSubAccount}
-        getSubAccountBalance={getSubAccountBalance}
-      />
     </div>
   );
 }
