@@ -15,6 +15,20 @@ interface GetSubAccountsResponse {
   subAccounts: SubAccount[];
 }
 
+interface PermissionsResponse {
+  grantedPermissions?: Array<{
+    signer: {
+      data: {
+        address: string;
+      };
+    };
+  }>;
+  factory?: string;
+  factoryData?: string;
+  address?: string;
+  [key: string]: unknown;
+}
+
 export function useSubAccount() {
   const [provider, setProvider] = useState<ReturnType<
     ReturnType<typeof createBaseAccountSDK>["getProvider"]
@@ -35,7 +49,7 @@ export function useSubAccount() {
   useEffect(() => {
     const initializeSDK = async () => {
       try {
-        const sdkInstance = createBaseAccountSDK(baseAccountSDKConfig as any);
+        const sdkInstance = createBaseAccountSDK(baseAccountSDKConfig);
         const providerInstance = sdkInstance.getProvider();
 
         setSdk(sdkInstance);
@@ -243,7 +257,7 @@ export function useSubAccount() {
               },
             },
           ],
-        })) as any;
+        })) as PermissionsResponse;
 
         console.log("Permissions granted:", permissionsResponse);
 

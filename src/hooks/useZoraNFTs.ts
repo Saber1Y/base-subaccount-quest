@@ -93,34 +93,44 @@ export function useZoraNFTs(chainId: number = 8453) {
       body: JSON.stringify(query),
     });
     const json = await res.json();
-    
+
     if (json.errors) {
       throw new Error(`GraphQL Error: ${json.errors[0].message}`);
     }
-    
+
     // Parse the new response structure
     const tokens = json?.data?.tokens?.nodes ?? [];
     const collectionsMap = new Map<string, GraphQLCollection>();
-    
-    tokens.forEach((node: { token: { collectionAddress: string; tokenId: string; tokenStandard: string; mintInfo: { mintable: boolean } } }) => {
-      const { collectionAddress, tokenId, tokenStandard, mintInfo } = node.token;
-      
-      if (!mintInfo.mintable) return; // Skip non-mintable tokens
-      
-      const mintType = tokenStandard === "ERC1155" ? "1155" : "721";
-      
-      if (!collectionsMap.has(collectionAddress)) {
-        collectionsMap.set(collectionAddress, {
-          contract: collectionAddress,
-          tokenIds: [],
-          mintType: mintType as "1155" | "721",
-        });
+
+    tokens.forEach(
+      (node: {
+        token: {
+          collectionAddress: string;
+          tokenId: string;
+          tokenStandard: string;
+          mintInfo: { mintable: boolean };
+        };
+      }) => {
+        const { collectionAddress, tokenId, tokenStandard, mintInfo } =
+          node.token;
+
+        if (!mintInfo.mintable) return; // Skip non-mintable tokens
+
+        const mintType = tokenStandard === "ERC1155" ? "1155" : "721";
+
+        if (!collectionsMap.has(collectionAddress)) {
+          collectionsMap.set(collectionAddress, {
+            contract: collectionAddress,
+            tokenIds: [],
+            mintType: mintType as "1155" | "721",
+          });
+        }
+
+        const collection = collectionsMap.get(collectionAddress)!;
+        collection.tokenIds.push(BigInt(tokenId));
       }
-      
-      const collection = collectionsMap.get(collectionAddress)!;
-      collection.tokenIds.push(BigInt(tokenId));
-    });
-    
+    );
+
     return Array.from(collectionsMap.values());
   };
 
@@ -150,11 +160,41 @@ export function useZoraNFTs(chainId: number = 8453) {
               mintType: col.mintType,
             });
             // token may contain metadata, supply, minted, etc. either at top-level or nested under `.token`
-            const anyToken = token as any;
-            const metadata = anyToken.metadata ?? anyToken.token?.metadata;
-            const mintSettings = anyToken.mintSettings ?? anyToken.token?.mintSettings;
-            const supply = anyToken.supply ?? anyToken.token?.supply;
-            const creator = anyToken.creator ?? anyToken.token?.creator;
+            const tokenData = token as {
+              metadata?: {
+                name?: string;
+                description?: string;
+                image?: string;
+              };
+              mintSettings?: {
+                mintPrice?: bigint;
+              };
+              supply?: {
+                max?: bigint;
+                minted?: bigint;
+              };
+              creator?: Address;
+              token?: {
+                metadata?: {
+                  name?: string;
+                  description?: string;
+                  image?: string;
+                };
+                mintSettings?: {
+                  mintPrice?: bigint;
+                };
+                supply?: {
+                  max?: bigint;
+                  minted?: bigint;
+                };
+                creator?: Address;
+              };
+            };
+            const metadata = tokenData.metadata ?? tokenData.token?.metadata;
+            const mintSettings =
+              tokenData.mintSettings ?? tokenData.token?.mintSettings;
+            const supply = tokenData.supply ?? tokenData.token?.supply;
+            const creator = tokenData.creator ?? tokenData.token?.creator;
 
             fetchedNFTs.push({
               contractAddress: col.contract as Address,

@@ -67,19 +67,19 @@ export function useCreatorCoins(feedType: FeedType = "new") {
         const edges = response.data?.exploreList?.edges || [];
         const newCoins: CreatorCoin[] = edges.map(
           (edge: { node: Record<string, unknown> }) => ({
-            id: edge.node.id || edge.node.address,
-            name: edge.node.name || "Unnamed Coin",
-            symbol: edge.node.symbol || "UNK",
-            description: edge.node.description,
-            address: edge.node.address,
-            creatorAddress: edge.node.creatorAddress,
-            marketCap: edge.node.marketCap || "0",
-            volume24h: edge.node.volume24h || "0",
-            marketCapDelta24h: edge.node.marketCapDelta24h,
-            totalSupply: edge.node.totalSupply || "0",
-            uniqueHolders: edge.node.uniqueHolders || 0,
-            createdAt: edge.node.createdAt || new Date().toISOString(),
-            chainId: edge.node.chainId || 84532, // Base Sepolia
+            id: (edge.node.id as string) || (edge.node.address as string) || "",
+            name: (edge.node.name as string) || "Unnamed Coin",
+            symbol: (edge.node.symbol as string) || "UNK",
+            description: edge.node.description as string | undefined,
+            address: (edge.node.address as string) || "",
+            creatorAddress: (edge.node.creatorAddress as string) || "",
+            marketCap: (edge.node.marketCap as string) || "0",
+            volume24h: (edge.node.volume24h as string) || "0",
+            marketCapDelta24h: edge.node.marketCapDelta24h as string | undefined,
+            totalSupply: (edge.node.totalSupply as string) || "0",
+            uniqueHolders: (edge.node.uniqueHolders as number) || 0,
+            createdAt: (edge.node.createdAt as string) || new Date().toISOString(),
+            chainId: (edge.node.chainId as number) || 84532, // Base Sepolia
           })
         );
 

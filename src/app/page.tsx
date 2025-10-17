@@ -36,7 +36,7 @@ export default function Home() {
   const [showSubAccountSetup, setShowSubAccountSetup] = useState(false);
 
   const [tradingCoin, setTradingCoin] = useState<string | null>(null);
-  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
+  const [ethBalance, setEthBalance] = useState<number | null>(null);
   const [notifications, setNotifications] = useState<
     Array<{
       id: string;
@@ -51,11 +51,11 @@ export default function Home() {
       if (!subAccount) return;
 
       try {
-        // Use the working balance source (getSubAccountBalance) instead of getUSDCBalance
+        // Use the working balance source (getSubAccountBalance) for ETH balance
         const balanceHex = await getSubAccountBalance();
         if (balanceHex && typeof balanceHex === "string") {
           const balance = Number(BigInt(balanceHex)) / 1e18;
-          setUsdcBalance(balance);
+          setEthBalance(balance);
 
           // Show helpful notification if balance is low
           if (balance === 0) {
@@ -65,11 +65,11 @@ export default function Home() {
             );
           }
         } else {
-          setUsdcBalance(0);
+          setEthBalance(0);
         }
       } catch (error) {
         console.error("Failed to fetch ETH balance:", error);
-        setUsdcBalance(0);
+        setEthBalance(0);
       }
     };
 
@@ -421,8 +421,8 @@ export default function Home() {
                   Wallet Balance (Testnet)
                 </div>
                 <div className="text-sm font-bold text-green-900">
-                  {usdcBalance !== null ? (
-                    `${usdcBalance.toFixed(4)} ETH`
+                  {ethBalance !== null ? (
+                    `${ethBalance.toFixed(4)} ETH`
                   ) : (
                     <div className="h-4 w-16 bg-green-200 rounded animate-pulse" />
                   )}

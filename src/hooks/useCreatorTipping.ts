@@ -5,14 +5,6 @@ import { Address, parseUnits } from "viem";
 
 import type { SubAccount } from "./useSubAccount";
 
-// We'll tip with ETH instead of USDC since USDC transfers aren't working reliably
-// ETH tip amounts in USD equivalent (approximate)
-const ETH_TIP_AMOUNTS = {
-  small: "0.001", // ~$2-3
-  medium: "0.003", // ~$6-9
-  large: "0.005", // ~$10-15
-} as const;
-
 export interface TipResult {
   success: boolean;
   txHash?: string;
@@ -112,7 +104,5 @@ export function useCreatorTipping(
     tipCreator,
     quickTip,
     getETHBalance,
-    // Keep old function name for compatibility but return ETH balance
-    getUSDCBalance: getETHBalance,
   };
 }
